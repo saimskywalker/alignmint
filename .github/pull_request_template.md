@@ -16,7 +16,7 @@
 
 ### AI use
 
-<!-- Required for outside contributors; a check fails without it. See CONTRIBUTING.md. -->
+<!-- Using AI is welcome. Required: tick one, naming the tool and model if you used AI; a check fails without it. See CONTRIBUTING.md. -->
 
 - [ ] None
 - [ ] Some (tool or agent, and model: ...)
