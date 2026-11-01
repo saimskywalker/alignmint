@@ -216,8 +216,11 @@ Auto-detection looks at `$ANDROID_HOME/ndk/*` (highest version wins), then
 
 ## Reading a failure
 
-A `[FAIL]` line names the ABI and the library. That name is the whole answer,
-because the fix depends on who built the file.
+A `[FAIL]` line names the ABI and the library. In an AAB, a library outside
+the base module is named by its path in the bundle instead, such as
+`feature_camera/lib/arm64-v8a/libfoo.so`, so the module it ships in is on the
+same line. That name is the whole answer, because the fix depends on who built
+the file.
 
 **Libraries you compile yourself** are aligned by NDK r28 or newer. If one of
 yours fails, raise the NDK version your build uses and rebuild.
@@ -254,10 +257,9 @@ page-size emulator image remains worthwhile.
 It also says nothing about libraries loaded at runtime rather than shipped in
 the archive.
 
-For an AAB it currently reads only the base module's libraries, under
-`base/lib/`. Native libraries inside dynamic feature modules are not checked
-yet; that is tracked in
-[#4](https://github.com/saimskywalker/android-imaji-16kb-alignment/issues/4).
+For an AAB it reads the libraries of every module in the bundle: `base/lib/`
+and the `lib/` of each dynamic feature or other module, since Play checks all
+of them.
 
 ## Running the tests
 

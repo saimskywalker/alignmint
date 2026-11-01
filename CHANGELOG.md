@@ -18,6 +18,14 @@ looks barely different.
 
 ### Fixed
 
+- An AAB's native libraries are now checked in every module, not only in
+  `base/lib/`. A `.so` in a dynamic feature module was never extracted or
+  measured, so a bundle whose only unaligned library sat in a feature module
+  reported `PASS` and exited `0`. Libraries outside base are reported by their
+  path in the bundle (`feature_camera/lib/arm64-v8a/libfoo.so`); base keeps
+  the short form. A bundle whose native code is only in feature modules is
+  measured instead of exiting `2` with "no native libraries found".
+  ([#4](https://github.com/saimskywalker/android-imaji-16kb-alignment/issues/4))
 - An artifact whose 64-bit ABI directory contains no `.so` no longer reports
   `PASS` and exits `0`. `lib/<abi>/` can hold files that are not libraries —
   `wrap.sh`, for one — and such a run measured nothing at all while printing

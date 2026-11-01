@@ -124,6 +124,16 @@ assert_not_out() {
   return 0
 }
 
+# One line of output holding both $1 and $2: a verdict is only useful if it
+# sits on the line that names the library it is about.
+assert_line() {
+  if ! printf '%s\n' "${OUT}" | grep -F -- "$1" | grep -qF -- "$2"; then
+    fail "expected a line containing both: $1 / $2"
+    return 1
+  fi
+  return 0
+}
+
 # A test body is a function named t_<something>; check() runs one unless the
 # filter excludes it.
 check() {
@@ -500,6 +510,62 @@ t_bundletool_flag_is_honoured() {
   assert_out "PASS" || return 1
 }
 
+t_aab_feature_module_aligned_passes() {
+  # Every module's libraries are read, and the ones outside base are named by
+  # their path in the bundle. base keeps the short form it always had.
+  run_tool "${FIXTURES}/feature-module.aab"
+  assert_rc 0 || return 1
+  assert_out "PASS" || return 1
+  assert_line "feature_camera/lib/arm64-v8a/libcamera.so" "[ok]" || return 1
+  assert_line "feature_camera/lib/armeabi-v7a" "[SKIP]" || return 1
+  assert_line "libexample.so" "[ok]" || return 1
+  assert_not_out "base/lib/" || return 1
+  # A .so shipped as an asset, and bundletool's debug symbols, are not
+  # libraries the device loads; lib/ in their path does not make them one.
+  assert_not_out "libasset_decoy.so" || return 1
+  assert_not_out "BUNDLE-METADATA" || return 1
+}
+
+t_aab_unaligned_lib_in_feature_module_fails_with_one() {
+  # The bug in #4: only base/lib/ was extracted, so an unaligned .so in a
+  # dynamic feature module was never looked at and the run printed PASS and
+  # exited 0 over a bundle Play would reject.
+  TEST_ENV="STUB_OBJDUMP_UNALIGNED_PATH=/feature_camera/"
+  run_tool "${FIXTURES}/feature-module.aab"
+  assert_rc 1 || return 1
+  assert_line "feature_camera/lib/arm64-v8a/libcamera.so" "[FAIL] min align 2**12" || return 1
+  assert_line "libexample.so" "[ok]" || return 1
+  assert_out "Play will reject this upload" || return 1
+  assert_not_out "PASS" || return 1
+}
+
+t_aab_libs_only_in_feature_module_are_measured() {
+  # No base/lib/ at all. This used to be "no native libraries found", exit 2,
+  # about a bundle that has native code.
+  run_tool "${FIXTURES}/feature-only-libs.aab"
+  assert_rc 0 || return 1
+  assert_line "feature_ml/lib/arm64-v8a/libmlkit_prebuilt.so" "[ok]" || return 1
+  assert_out "PASS" || return 1
+}
+
+t_aab_libs_only_in_feature_module_unaligned_fails_with_one() {
+  TEST_ENV="STUB_OBJDUMP_ALIGN=2**12"
+  run_tool "${FIXTURES}/feature-only-libs.aab"
+  assert_rc 1 || return 1
+  assert_line "feature_ml/lib/arm64-v8a/libmlkit_prebuilt.so" "[FAIL] min align 2**12" || return 1
+  assert_not_out "PASS" || return 1
+}
+
+t_aab_feature_module_objdump_failure_is_two() {
+  # Reading more modules must not weaken the exit-2 contract: a library in a
+  # feature module the tool could not read leaves the bundle unproven.
+  TEST_ENV="STUB_OBJDUMP_FAIL=1"
+  run_tool "${FIXTURES}/feature-only-libs.aab"
+  assert_rc 2 || return 1
+  assert_out "could not read feature_ml/lib/arm64-v8a/libmlkit_prebuilt.so" || return 1
+  assert_not_out "PASS" || return 1
+}
+
 # -------------------------------------------------------------------- runner
 
 printf 'android-16kb-check test suite\n\n'
@@ -546,6 +612,11 @@ check "an AAB without PAGE_ALIGNMENT_16K exits 1"   t_aab_without_page_alignment
 check "a bundletool failure exits 2"                t_aab_bundletool_failure_is_two
 check "BUNDLETOOL env var is honoured"              t_bundletool_env_var_is_honoured
 check "--bundletool flag is honoured"               t_bundletool_flag_is_honoured
+check "an AAB with aligned feature modules exits 0" t_aab_feature_module_aligned_passes
+check "an unaligned lib in a feature module exits 1" t_aab_unaligned_lib_in_feature_module_fails_with_one
+check "libs only in a feature module are measured"  t_aab_libs_only_in_feature_module_are_measured
+check "unaligned libs only in a feature module exit 1" t_aab_libs_only_in_feature_module_unaligned_fails_with_one
+check "objdump failing in a feature module exits 2" t_aab_feature_module_objdump_failure_is_two
 
 printf '\n%s passed, %s failed\n' "${PASSED}" "${FAILED}"
 if (( FAILED > 0 )); then

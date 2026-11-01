@@ -27,6 +27,30 @@ make("sample.aab", [
     ("base/lib/arm64-v8a/libexample.so", SO),
     ("base/lib/armeabi-v7a/liblegacy.so", SO),
 ])
+# An AAB with a dynamic feature module that carries its own native code next
+# to base's. The other entries are decoys that must NOT be measured: a .so
+# shipped as an asset (lib/ is in its path, but not as <module>/lib/), the
+# debug-symbol files bundletool keeps under BUNDLE-METADATA/, and a module
+# with no native code at all.
+make("feature-module.aab", [
+    ("BundleConfig.pb", b"fixture\n"),
+    ("BUNDLE-METADATA/com.android.tools.build.debugsymbols/arm64-v8a/libcamera.so.sym", b"fixture\n"),
+    ("base/manifest/AndroidManifest.xml", b"fixture\n"),
+    ("base/lib/arm64-v8a/libexample.so", SO),
+    ("base/lib/armeabi-v7a/liblegacy.so", SO),
+    ("base/assets/lib/arm64-v8a/libasset_decoy.so", SO),
+    ("feature_camera/manifest/AndroidManifest.xml", b"fixture\n"),
+    ("feature_camera/lib/arm64-v8a/libcamera.so", SO),
+    ("feature_camera/lib/armeabi-v7a/libcamera.so", SO),
+    ("feature_nolibs/manifest/AndroidManifest.xml", b"fixture\n"),
+])
+# An AAB whose only native code is in a feature module; base has no lib/.
+make("feature-only-libs.aab", [
+    ("BundleConfig.pb", b"fixture\n"),
+    ("base/manifest/AndroidManifest.xml", b"fixture\n"),
+    ("feature_ml/manifest/AndroidManifest.xml", b"fixture\n"),
+    ("feature_ml/lib/arm64-v8a/libmlkit_prebuilt.so", SO),
+])
 make("no-native-libs.apk", [
     ("AndroidManifest.xml", b"fixture\n"),
 ])

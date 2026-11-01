@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # Stub llvm-objdump. Prints a program-header table in the same shape the real
 # one does for `-p`, with the LOAD alignment controlled by STUB_OBJDUMP_ALIGN.
+# STUB_OBJDUMP_UNALIGNED_PATH, when set, reports 2**12 for any library whose
+# path contains it, so one library in an artifact can fail while the rest pass.
 set -eu
 if [[ "${STUB_OBJDUMP_FAIL:-0}" == "1" ]]; then
   echo "stub llvm-objdump: forced failure" >&2
   exit 3
 fi
 align="${STUB_OBJDUMP_ALIGN:-2**14}"
+file="${!#}"
+if [[ -n "${STUB_OBJDUMP_UNALIGNED_PATH:-}" && "${file}" == *"${STUB_OBJDUMP_UNALIGNED_PATH}"* ]]; then
+  align="2**12"
+fi
 if [[ "${STUB_OBJDUMP_NO_LOAD:-0}" == "1" ]]; then
   printf '\nProgram Header:\n'
   printf '    PHDR off 0x40 vaddr 0x40 paddr 0x40 align 2**3\n'
