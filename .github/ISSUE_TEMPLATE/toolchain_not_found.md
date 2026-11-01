@@ -42,3 +42,12 @@ $ echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT"
 
 <!-- `android-16kb-check --ndk /path/to/ndk/<version> <artifact>` — if that
      succeeds, the bug is in auto-detection, which narrows it a lot. -->
+
+**Did you use an AI tool to write this issue?**
+
+<!-- See "AI-assisted contributions" in CONTRIBUTING.md. -->
+
+- [ ] No
+- [ ] Yes, for parts (tool and model: ...)
+- [ ] Yes, mostly (tool and model: ...)
+- [ ] I wrote this issue in my own words.
