@@ -401,114 +401,204 @@ printf '\n'
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
-# AABs nest their libraries under base/lib/, APKs put them at lib/.
+# Where the libraries live. An APK puts them at lib/<abi>/. An AAB keeps them
+# per module, at <module>/lib/<abi>/ — base/, plus one directory for every
+# dynamic feature or other module. Play enforces 16 KB alignment on every .so
+# in the bundle, and a feature module is a common home for exactly the kind of
+# prebuilt library this check exists to catch, so every module is read, not
+# only base.
+#
+# Three parallel arrays, one entry per library root:
+#   LIB_PATTERNS  what to ask unzip for
+#   LIB_ROOTS     where that lands under ${WORK}
+#   LIB_LABELS    what to print in front of an ABI or library name. Empty for
+#                 an APK and for an AAB's base module, so the common report
+#                 reads as it always has; "<module>/lib/" for any other
+#                 module, so a [FAIL] there names the module it is in.
+LIB_PATTERNS=()
+LIB_ROOTS=()
+LIB_LABELS=()
 if [[ "${KIND}" == "aab" ]]; then
-  LIB_GLOB='base/lib/*'
-  LIB_ROOT="${WORK}/base/lib"
+  # The module list comes from the archive's own listing rather than from a
+  # '*/lib/*' extraction pattern. unzip's '*' also matches '/', so that
+  # pattern would pull in base/assets/lib/... or anything else with a lib/
+  # somewhere in its path. BUNDLE-METADATA/ and META-INF/ are not modules.
+  if ! listing="$(unzip -Z1 "${ARTIFACT}" 2>/dev/null)"; then
+    cannot_verify "unzip could not list the entries of ${ARTIFACT}." \
+      "Without the entry list there is no way to know which modules carry" \
+      "native libraries, so none of them were measured." \
+      "Usual causes: a truncated or corrupt archive."
+  fi
+  # base sorts first, the rest alphabetically, so the report always opens
+  # with the module most people are looking for.
+  modules="$(printf '%s\n' "${listing}" \
+    | awk -F/ 'NF >= 4 && $2 == "lib" && $1 != "" &&
+               $1 != "BUNDLE-METADATA" && $1 != "META-INF" {
+                 print ($1 == "base" ? "0 " : "1 ") $1
+               }' \
+    | sort -u | sed 's/^[01] //')"
+  while IFS= read -r module; do
+    [[ -n "${module}" ]] || continue
+    LIB_PATTERNS+=("${module}/lib/*")
+    LIB_ROOTS+=("${module}/lib")
+    if [[ "${module}" == "base" ]]; then
+      LIB_LABELS+=("")
+    else
+      LIB_LABELS+=("${module}/lib/")
+    fi
+  done <<EOF
+${modules}
+EOF
+  NO_LIBS_HINT="Expected <module>/lib/<abi>/*.so in at least one module of ${ARTIFACT}."
 else
-  LIB_GLOB='lib/*'
-  LIB_ROOT="${WORK}/lib"
+  LIB_PATTERNS=('lib/*')
+  LIB_ROOTS=('lib')
+  LIB_LABELS=('')
+  NO_LIBS_HINT="Expected lib/* inside ${ARTIFACT}."
 fi
+
+no_native_libraries() {
+  cannot_verify "no native libraries found in the artifact." \
+    "${NO_LIBS_HINT}" \
+    "Either this is the wrong file, or the build produced no .so at all." \
+    "An app with no native code has nothing for this check to measure."
+}
+
+# Checked before the arrays are expanded: "${empty[@]}" is an unbound-variable
+# error under set -u in the bash 3.2 that macOS ships.
+if (( ${#LIB_ROOTS[@]} == 0 )); then
+  no_native_libraries
+fi
+
 # unzip's status is not discarded. If it refuses even one entry — an
 # unsupported compression method, a truncated archive, a full ${TMPDIR} — the
 # tree below is a SUBSET of the artifact, and measuring a subset while
 # printing PASS is the same green-without-looking answer as measuring
 # nothing. 0 is a clean extraction, 1 is "extracted, with warnings", and 11
-# is "nothing matched the glob", which the missing-LIB_ROOT check just below
+# is "nothing matched the pattern", which the missing-root check just below
 # reports properly.
 unzip_status=0
-unzip -q "${ARTIFACT}" "${LIB_GLOB}" -d "${WORK}" >/dev/null 2>&1 || unzip_status=$?
+unzip -q "${ARTIFACT}" "${LIB_PATTERNS[@]}" -d "${WORK}" >/dev/null 2>&1 || unzip_status=$?
 case "${unzip_status}" in
   0|1|11) ;;
-  *) cannot_verify "unzip could not read every ${LIB_GLOB} entry out of the artifact (exit ${unzip_status})." \
+  *) cannot_verify "unzip could not read every native-library entry out of the artifact (exit ${unzip_status})." \
        "Part of the archive was skipped, so a verdict here would cover some" \
        "of the native libraries rather than all of them." \
        "Usual causes: a compression method this unzip does not support, a" \
        "truncated or corrupt archive, or no space left in \${TMPDIR}." ;;
 esac
 
-if [[ ! -d "${LIB_ROOT}" ]]; then
-  cannot_verify "no native libraries found in the artifact." \
-    "Expected ${LIB_GLOB} inside ${ARTIFACT}." \
-    "Either this is the wrong file, or the build produced no .so at all." \
-    "An app with no native code has nothing for this check to measure."
-fi
-
-printf '==> ELF LOAD segment alignment (must be >= 2**14)\n'
-fail=0
-abis64=0     # 64-bit ABI directories present in the archive
-measured=0   # 64-bit .so files actually read
-for abi_dir in "${LIB_ROOT}"/*; do
-  [[ -d "${abi_dir}" ]] || continue
-  abi="$(basename "${abi_dir}")"
-
-  # 16 KB pages are a 64-bit feature. Say so out loud — an ABI reported
-  # nowhere reads exactly like an ABI that passed.
-  if [[ "${abi}" != *64* ]]; then
-    n="$(find "${abi_dir}" -name '*.so' | wc -l | tr -d ' ')"
-    printf '    %-14s [SKIP] 32-bit, exempt (%s libs)\n' "${abi}" "${n}"
-    continue
-  fi
-  abis64=$(( abis64 + 1 ))
-  in_this_abi=0
-
-  for so in "${abi_dir}"/*.so; do
-    [[ -f "${so}" ]] || continue
-    so_name="$(basename "${so}")"
-    in_this_abi=$(( in_this_abi + 1 ))
-    measured=$(( measured + 1 ))
-
-    # objdump -p prints one 'align 2**N' per program header. Only LOAD
-    # matters; anything below 2**14 breaks on a 16 KB-page device.
-    #
-    # objdump's exit status is read on its own, before any parsing. The two
-    # cases below look identical in the output — both produce no 'align'
-    # tokens — but they are opposite answers:
-    #
-    #   objdump ran and found no readable LOAD segments -> the ARTIFACT is
-    #   broken, which is a [FAIL].
-    #   objdump could not run at all -> nothing was measured, which is a 2.
-    #
-    # Collapsing the second into the first reports "Play will reject this
-    # upload" about a library the tool never managed to look at.
-    if ! raw="$("${OBJDUMP}" -p "${so}" 2>/dev/null)"; then
-      cannot_verify "${OBJDUMP##*/} could not read ${abi}/${so_name}." \
-        "Command: ${OBJDUMP} -p <${so_name}>" \
-        "Nothing was measured for this library, so the artifact is unproven." \
-        "Check that the objdump above runs on this machine, and that the" \
-        "artifact is not truncated or corrupt."
+for root in "${LIB_ROOTS[@]}"; do
+  if [[ ! -d "${WORK}/${root}" ]]; then
+    if [[ "${KIND}" == "apk" ]]; then
+      no_native_libraries
     fi
-    aligns="$(printf '%s\n' "${raw}" \
-                | awk '$1=="LOAD"{for(i=1;i<=NF;i++) if($i=="align") print $(i+1)}')"
+    # The AAB listing named this module, so its libraries exist; if they did
+    # not come out, the rest of the tree is a subset of the bundle.
+    cannot_verify "the archive lists ${root}/ but nothing under it was extracted." \
+      "A verdict on the other modules would not cover this one."
+  fi
+done
 
-    worst=99
-    while read -r token; do
-      exponent="${token#2\*\*}"
-      [[ "${exponent}" =~ ^[0-9]+$ ]] || continue
-      if (( exponent < worst )); then
-        worst="${exponent}"
+fail=0
+abis64=0     # 64-bit ABI directories present in the archive, over all modules
+measured=0   # 64-bit .so files actually read
+
+# Measure every library under one root. $1 is the extracted root directory,
+# $2 the label from LIB_LABELS.
+check_lib_root() {
+  local root="$1" label="$2"
+  local abi_dir abi n in_this_abi so so_name where raw aligns worst token exponent
+
+  for abi_dir in "${root}"/*; do
+    [[ -d "${abi_dir}" ]] || continue
+    abi="$(basename "${abi_dir}")"
+
+    # 16 KB pages are a 64-bit feature. Say so out loud — an ABI reported
+    # nowhere reads exactly like an ABI that passed.
+    if [[ "${abi}" != *64* ]]; then
+      n="$(find "${abi_dir}" -name '*.so' | wc -l | tr -d ' ')"
+      printf '    %-14s [SKIP] 32-bit, exempt (%s libs)\n' "${label}${abi}" "${n}"
+      continue
+    fi
+    abis64=$(( abis64 + 1 ))
+    in_this_abi=0
+
+    for so in "${abi_dir}"/*.so; do
+      [[ -f "${so}" ]] || continue
+      so_name="$(basename "${so}")"
+      in_this_abi=$(( in_this_abi + 1 ))
+      measured=$(( measured + 1 ))
+
+      # Outside an AAB's base module the line names the library by its path
+      # in the bundle, in the same width as the two columns it replaces, so
+      # the verdicts still line up.
+      if [[ -n "${label}" ]]; then
+        printf -v where '%-53s' "${label}${abi}/${so_name}"
+      else
+        printf -v where '%-14s %-38s' "${abi}" "${so_name}"
       fi
-    done <<EOF
+
+      # objdump -p prints one 'align 2**N' per program header. Only LOAD
+      # matters; anything below 2**14 breaks on a 16 KB-page device.
+      #
+      # objdump's exit status is read on its own, before any parsing. The two
+      # cases below look identical in the output — both produce no 'align'
+      # tokens — but they are opposite answers:
+      #
+      #   objdump ran and found no readable LOAD segments -> the ARTIFACT is
+      #   broken, which is a [FAIL].
+      #   objdump could not run at all -> nothing was measured, which is a 2.
+      #
+      # Collapsing the second into the first reports "Play will reject this
+      # upload" about a library the tool never managed to look at.
+      if ! raw="$("${OBJDUMP}" -p "${so}" 2>/dev/null)"; then
+        cannot_verify "${OBJDUMP##*/} could not read ${label}${abi}/${so_name}." \
+          "Command: ${OBJDUMP} -p <${so_name}>" \
+          "Nothing was measured for this library, so the artifact is unproven." \
+          "Check that the objdump above runs on this machine, and that the" \
+          "artifact is not truncated or corrupt."
+      fi
+      aligns="$(printf '%s\n' "${raw}" \
+                  | awk '$1=="LOAD"{for(i=1;i<=NF;i++) if($i=="align") print $(i+1)}')"
+
+      worst=99
+      while read -r token; do
+        exponent="${token#2\*\*}"
+        [[ "${exponent}" =~ ^[0-9]+$ ]] || continue
+        if (( exponent < worst )); then
+          worst="${exponent}"
+        fi
+      done <<EOF
 ${aligns}
 EOF
 
-    if (( worst == 99 )); then
-      printf '    %-14s %-38s [FAIL] no LOAD segments readable\n' "${abi}" "${so_name}" >&2
-      fail=1
-    elif (( worst < 14 )); then
-      printf '    %-14s %-38s [FAIL] min align 2**%s\n' "${abi}" "${so_name}" "${worst}" >&2
-      fail=1
-    else
-      printf '    %-14s %-38s [ok]   min align 2**%s\n' "${abi}" "${so_name}" "${worst}"
+      if (( worst == 99 )); then
+        printf '    %s [FAIL] no LOAD segments readable\n' "${where}" >&2
+        fail=1
+      elif (( worst < 14 )); then
+        printf '    %s [FAIL] min align 2**%s\n' "${where}" "${worst}" >&2
+        fail=1
+      else
+        printf '    %s [ok]   min align 2**%s\n' "${where}" "${worst}"
+      fi
+    done
+
+    # A 64-bit ABI directory holding no .so is not the same as one that
+    # passed, and it must not be reported by saying nothing. lib/<abi>/ can
+    # legitimately hold non-library files (wrap.sh, for one), so this shape
+    # does occur.
+    if (( in_this_abi == 0 )); then
+      printf '    %-14s [none] directory present but holds no .so\n' "${label}${abi}" >&2
     fi
   done
+}
 
-  # A 64-bit ABI directory holding no .so is not the same as one that passed,
-  # and it must not be reported by saying nothing. lib/<abi>/ can legitimately
-  # hold non-library files (wrap.sh, for one), so this shape does occur.
-  if (( in_this_abi == 0 )); then
-    printf '    %-14s [none] directory present but holds no .so\n' "${abi}" >&2
-  fi
+printf '==> ELF LOAD segment alignment (must be >= 2**14)\n'
+i=0
+while (( i < ${#LIB_ROOTS[@]} )); do
+  check_lib_root "${WORK}/${LIB_ROOTS[i]}" "${LIB_LABELS[i]}"
+  i=$(( i + 1 ))
 done
 
 printf '\n'

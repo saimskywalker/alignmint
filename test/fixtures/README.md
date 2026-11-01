@@ -8,6 +8,8 @@ matters here is only where the entries sit inside the archive.
 |---|---|
 | `sample.apk` | `lib/arm64-v8a/` (two libs) and `lib/armeabi-v7a/` (one lib) |
 | `sample.aab` | the same, nested under `base/lib/` as an AAB stores it |
+| `feature-module.aab` | `base/lib/` plus a `feature_camera/lib/` module with its own 64-bit and 32-bit libs, a module with no `lib/`, and decoys that are not libraries to measure: a `.so` under `base/assets/lib/` and debug symbols under `BUNDLE-METADATA/` |
+| `feature-only-libs.aab` | no `base/lib/`; the only 64-bit lib is in `feature_ml/lib/arm64-v8a/` |
 | `no-native-libs.apk` | no `lib/` directory at all |
 | `only-32bit.apk` | `lib/armeabi-v7a/` only, no 64-bit ABI |
 | `empty-64bit-abi.apk` | `lib/arm64-v8a/` holding only a `wrap.sh`, so there is a 64-bit ABI directory but no 64-bit library to measure |
