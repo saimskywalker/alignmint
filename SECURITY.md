@@ -14,7 +14,7 @@ Only the latest release line gets security fixes.
 Please do not open a public issue for a vulnerability.
 
 Report it privately through GitHub's private vulnerability reporting: open the
-[Security tab](https://github.com/saimskywalker/android-imaji-16kb-alignment/security)
+[Security tab](https://github.com/saimskywalker/alignmint/security)
 and choose "Report a vulnerability". Only the maintainer can see the report.
 
 `android-16kb-check` extracts and reads APKs and AABs that may come from

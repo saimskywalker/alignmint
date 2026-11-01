@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/saimskywalker/android-imaji-16kb-alignment/security/advisories/new
+    url: https://github.com/saimskywalker/alignmint/security/advisories/new
     about: Please report vulnerabilities privately, not in a public issue. See SECURITY.md.
