@@ -10,6 +10,8 @@ looks barely different.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-01
+
 ### Changed
 
 - The repository is now `saimskywalker/android-imaji-16kb-alignment`, and the
@@ -61,7 +63,7 @@ looks barely different.
 - The documented install command works as written. It wrote to root-owned
   `/usr/local/bin` without `sudo`, so it failed with `curl: (56)`.
 
-## [1.0.0] - 2026-08-27
+## [1.0.0] - 2026-10-14
 
 First release.
 
@@ -85,5 +87,6 @@ First release.
   be mistaken for one that passed.
 - `--help` and `--version`.
 
-[Unreleased]: https://github.com/saimskywalker/android-imaji-16kb-alignment/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/saimskywalker/android-imaji-16kb-alignment/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/saimskywalker/android-imaji-16kb-alignment/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/saimskywalker/android-imaji-16kb-alignment/releases/tag/v1.0.0

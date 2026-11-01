@@ -26,7 +26,7 @@
 set -euo pipefail
 
 PROGRAM="android-16kb-check"
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 # The three-way exit contract. 2 exists so a machine without the toolchain
 # reports "unproven" instead of "fine", which is the failure mode that lets an
