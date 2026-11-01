@@ -43,7 +43,7 @@ Quick start:
 
 ```bash
 curl -fsSLo android-16kb-check \
-  https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/main/android-16kb-check
+  https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/v1.1.0/android-16kb-check
 chmod +x android-16kb-check
 ./android-16kb-check path/to/app-release.aab
 ```
@@ -127,7 +127,7 @@ It is one file with no dependencies beyond the Android toolchain it calls.
 
 ```bash
 sudo curl -fsSLo /usr/local/bin/android-16kb-check \
-  https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/main/android-16kb-check
+  https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/v1.1.0/android-16kb-check
 sudo chmod +x /usr/local/bin/android-16kb-check
 ```
 
@@ -138,7 +138,7 @@ somewhere you own and make sure that directory is on `PATH`:
 ```bash
 mkdir -p ~/.local/bin
 curl -fsSLo ~/.local/bin/android-16kb-check \
-  https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/main/android-16kb-check
+  https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/v1.1.0/android-16kb-check
 chmod +x ~/.local/bin/android-16kb-check
 ```
 
@@ -185,7 +185,7 @@ downloads the jar. Add this after the step that builds your release:
 - name: Check 16 KB page alignment
   run: |
     curl -fsSLo android-16kb-check \
-      https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/main/android-16kb-check
+      https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/v1.1.0/android-16kb-check
     chmod +x android-16kb-check
     curl -fsSLo bundletool-all.jar \
       https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
