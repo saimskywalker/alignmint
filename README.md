@@ -1,27 +1,55 @@
 # android-imaji-16kb-alignment — Google Play 16 KB page-size check for APK/AAB
 
+[![CI](https://github.com/saimskywalker/android-imaji-16kb-alignment/actions/workflows/ci.yml/badge.svg)](https://github.com/saimskywalker/android-imaji-16kb-alignment/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/saimskywalker/android-imaji-16kb-alignment)](https://github.com/saimskywalker/android-imaji-16kb-alignment/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Your Play Console upload was rejected for 16 KB page alignment, or you want to
 find out before you upload. This is a shell script that answers that question
 against the actual `.apk` or `.aab` file, on your machine, in a few seconds.
 
+The run below is a real one, on a small APK built with NDK r28. One of its
+libraries was linked with `-z max-page-size=4096`, the way an older prebuilt
+`.so` from a dependency often is.
+
 ```
-$ android-16kb-check app-release.aab
-==> artifact : app-release.aab
+$ android-16kb-check app-release.apk
+==> artifact : app-release.apk
 ==> objdump  : /Users/you/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-objdump
-==> archive  : bundletool (bundletool)
+==> archive  : /Users/you/Library/Android/sdk/build-tools/36.1.0/zipalign (zipalign)
 
 ==> Archive alignment
-    [ok]   bundle config declares PAGE_ALIGNMENT_16K
+    [ok]   zipalign -c -P 16 4: verification successful
 
 ==> ELF LOAD segment alignment (must be >= 2**14)
-    arm64-v8a      libapp.so                              [ok]   min align 2**16
-    arm64-v8a      libflutter.so                          [ok]   min align 2**14
-    arm64-v8a      libsomevendor.so                       [FAIL] min align 2**12
-    armeabi-v7a    [SKIP] 32-bit, exempt (3 libs)
+    arm64-v8a      libdemo.so                             [ok]   min align 2**14
+    arm64-v8a      libprebuilt_old.so                     [FAIL] min align 2**12
+    armeabi-v7a    [SKIP] 32-bit, exempt (1 libs)
+    x86_64         libdemo.so                             [ok]   min align 2**14
 
 FAIL — at least one 64-bit library is not 16 KB aligned.
   Play will reject this upload.
+
+  Libraries you compile yourself are aligned by NDK r28 or newer.
+  A failure here is usually a PREBUILT .so shipped inside a dependency,
+  built with an older NDK. Bumping your own ndkVersion cannot fix that
+  binary — find the dependency that owns the .so named above and upgrade
+  it to a release that ships 16 KB-aligned libraries, or drop it.
+$ echo $?
+1
 ```
+
+Quick start:
+
+```bash
+curl -fsSLo android-16kb-check \
+  https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/main/android-16kb-check
+chmod +x android-16kb-check
+./android-16kb-check path/to/app-release.aab
+```
+
+It finds the NDK and build-tools under `ANDROID_HOME` or the default SDK
+location. An AAB also needs `bundletool`; see [Prerequisites](#prerequisites).
 
 ## The requirement
 
@@ -147,6 +175,32 @@ to `--ndk`; `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) is used to find the highest
 installed `ndk/<version>` and the newest `build-tools/<version>/zipalign`;
 `BUNDLETOOL` is equivalent to `--bundletool`.
 
+## In GitHub Actions
+
+GitHub's `ubuntu-latest` runners already have an NDK and build-tools under
+`ANDROID_HOME`, and a JDK. They do not have `bundletool`, so an AAB check
+downloads the jar. Add this after the step that builds your release:
+
+```yaml
+- name: Check 16 KB page alignment
+  run: |
+    curl -fsSLo android-16kb-check \
+      https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/main/android-16kb-check
+    chmod +x android-16kb-check
+    curl -fsSLo bundletool-all.jar \
+      https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
+    ./android-16kb-check --bundletool bundletool-all.jar \
+      app/build/outputs/bundle/release/app-release.aab
+```
+
+For an APK, drop the bundletool lines and the `--bundletool` flag; `zipalign`
+is found in the runner's build-tools.
+
+Any non-zero exit fails the step, including `2`, because Actions runs `run:`
+blocks with `bash -e`. On a release job that is what you want: a gate that
+could not run should not let the build through. If you would rather keep `2`
+as a warning, use the `case` pattern from [Exit codes](#exit-codes).
+
 ## Prerequisites
 
 | tool | needed for | install |
@@ -200,6 +254,11 @@ page-size emulator image remains worthwhile.
 It also says nothing about libraries loaded at runtime rather than shipped in
 the archive.
 
+For an AAB it currently reads only the base module's libraries, under
+`base/lib/`. Native libraries inside dynamic feature modules are not checked
+yet; that is tracked in
+[#4](https://github.com/saimskywalker/android-imaji-16kb-alignment/issues/4).
+
 ## Running the tests
 
 ```bash
@@ -211,6 +270,15 @@ The suite needs no Android SDK and no real APK. External tools are replaced by
 stubs in `test/stubs`, and the artifacts by small archives in `test/fixtures`
 that have the right internal layout and nothing else. `shellcheck` runs over
 the script, the harness and the stubs in CI.
+
+## Contributing
+
+Bug reports and pull requests are welcome. Issues labelled
+[good first issue](https://github.com/saimskywalker/android-imaji-16kb-alignment/labels/good%20first%20issue)
+are small and come with pointers to the code and how to test the change.
+Questions and "does this work with my setup" go in
+[Discussions](https://github.com/saimskywalker/android-imaji-16kb-alignment/discussions).
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
 
 ## Trademarks
 
