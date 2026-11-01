@@ -1,6 +1,6 @@
 name: AI disclosure
 
-# Outside contributors say in the PR description whether they used AI tools.
+# PRs say in the description whether AI tools were used; using them is welcome.
 # See "AI-assisted contributions" in CONTRIBUTING.md. This job reads only the
 # event payload: no checkout, no token permissions.
 on:
