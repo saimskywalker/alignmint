@@ -10,6 +10,11 @@ looks barely different.
 
 ## [Unreleased]
 
+### Changed
+
+- The repository is renamed to `saimskywalker/alignmint`. Old links and
+  install URLs redirect; the script keeps its name, `android-16kb-check`.
+
 ## [1.1.0] - 2026-11-01
 
 ### Changed
@@ -27,7 +32,7 @@ looks barely different.
   path in the bundle (`feature_camera/lib/arm64-v8a/libfoo.so`); base keeps
   the short form. A bundle whose native code is only in feature modules is
   measured instead of exiting `2` with "no native libraries found".
-  ([#4](https://github.com/saimskywalker/android-imaji-16kb-alignment/issues/4))
+  ([#4](https://github.com/saimskywalker/alignmint/issues/4))
 - An artifact whose 64-bit ABI directory contains no `.so` no longer reports
   `PASS` and exits `0`. `lib/<abi>/` can hold files that are not libraries —
   `wrap.sh`, for one — and such a run measured nothing at all while printing
@@ -87,6 +92,6 @@ First release.
   be mistaken for one that passed.
 - `--help` and `--version`.
 
-[Unreleased]: https://github.com/saimskywalker/android-imaji-16kb-alignment/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/saimskywalker/android-imaji-16kb-alignment/compare/v1.0.0...v1.1.0
-[1.0.0]: https://github.com/saimskywalker/android-imaji-16kb-alignment/releases/tag/v1.0.0
+[Unreleased]: https://github.com/saimskywalker/alignmint/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/saimskywalker/alignmint/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/saimskywalker/alignmint/releases/tag/v1.0.0

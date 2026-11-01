@@ -1,7 +1,7 @@
-# android-imaji-16kb-alignment — Google Play 16 KB page-size check for APK/AAB
+# alignmint — Google Play 16 KB page-size check for APK/AAB
 
-[![CI](https://github.com/saimskywalker/android-imaji-16kb-alignment/actions/workflows/ci.yml/badge.svg)](https://github.com/saimskywalker/android-imaji-16kb-alignment/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/saimskywalker/android-imaji-16kb-alignment)](https://github.com/saimskywalker/android-imaji-16kb-alignment/releases)
+[![CI](https://github.com/saimskywalker/alignmint/actions/workflows/ci.yml/badge.svg)](https://github.com/saimskywalker/alignmint/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/saimskywalker/alignmint)](https://github.com/saimskywalker/alignmint/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Your Play Console upload was rejected for 16 KB page alignment, or you want to
@@ -43,7 +43,7 @@ Quick start:
 
 ```bash
 curl -fsSLo android-16kb-check \
-  https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/v1.1.0/android-16kb-check
+  https://raw.githubusercontent.com/saimskywalker/alignmint/v1.1.0/android-16kb-check
 chmod +x android-16kb-check
 ./android-16kb-check path/to/app-release.aab
 ```
@@ -127,7 +127,7 @@ It is one file with no dependencies beyond the Android toolchain it calls.
 
 ```bash
 sudo curl -fsSLo /usr/local/bin/android-16kb-check \
-  https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/v1.1.0/android-16kb-check
+  https://raw.githubusercontent.com/saimskywalker/alignmint/v1.1.0/android-16kb-check
 sudo chmod +x /usr/local/bin/android-16kb-check
 ```
 
@@ -138,7 +138,7 @@ somewhere you own and make sure that directory is on `PATH`:
 ```bash
 mkdir -p ~/.local/bin
 curl -fsSLo ~/.local/bin/android-16kb-check \
-  https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/v1.1.0/android-16kb-check
+  https://raw.githubusercontent.com/saimskywalker/alignmint/v1.1.0/android-16kb-check
 chmod +x ~/.local/bin/android-16kb-check
 ```
 
@@ -185,7 +185,7 @@ downloads the jar. Add this after the step that builds your release:
 - name: Check 16 KB page alignment
   run: |
     curl -fsSLo android-16kb-check \
-      https://raw.githubusercontent.com/saimskywalker/android-imaji-16kb-alignment/v1.1.0/android-16kb-check
+      https://raw.githubusercontent.com/saimskywalker/alignmint/v1.1.0/android-16kb-check
     chmod +x android-16kb-check
     curl -fsSLo bundletool-all.jar \
       https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
@@ -276,10 +276,10 @@ the script, the harness and the stubs in CI.
 ## Contributing
 
 Bug reports and pull requests are welcome. Issues labelled
-[good first issue](https://github.com/saimskywalker/android-imaji-16kb-alignment/labels/good%20first%20issue)
+[good first issue](https://github.com/saimskywalker/alignmint/labels/good%20first%20issue)
 are small and come with pointers to the code and how to test the change.
 Questions and "does this work with my setup" go in
-[Discussions](https://github.com/saimskywalker/android-imaji-16kb-alignment/discussions).
+[Discussions](https://github.com/saimskywalker/alignmint/discussions).
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
 
 ## Trademarks
