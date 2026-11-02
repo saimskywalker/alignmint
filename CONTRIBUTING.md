@@ -126,3 +126,8 @@ the same failure as reporting a pass it did not earn.
 Feature requests that fit: more places to find the toolchain, clearer failure
 messages, support for artifact shapes that exist and are not handled. Feature
 requests that do not: fixing alignment, wrapping Gradle, or guessing.
+
+## Stay in touch
+
+Don't forget to follow [@saimskywalker](https://github.com/saimskywalker) on
+GitHub to see new releases and other open-source projects as they come out.
