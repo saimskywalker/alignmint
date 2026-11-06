@@ -116,7 +116,9 @@ does it in bash for that reason; prefer it to adding a `sort` call.
 scripts. Keep failures and diagnostics on stderr. The text report is pinned
 byte for byte by `test/golden/`, and with `--format json` stdout carries the
 JSON object and nothing else. A new exit path goes through `cannot_verify` or
-`finish`, so it reports in both formats.
+`finish`, so it reports in both formats. `cannot_verify` takes a finding id
+first; reuse one from the README's "Finding ids" table where it fits, and add
+a row there if a new one is needed.
 
 ## Scope
 

@@ -218,65 +218,100 @@ in text mode, and `exit_code` in the object repeats it.
 android-16kb-check --format json app-release.aab > alignment.json
 ```
 
-The feature-module failure from the tests, pretty-printed here (the tool
-prints it on one line):
+The object starts with the envelope shared by alignmint, storehound and
+husk_sdk: `schemaVersion`, `tool`, `exitCode`, `summary` and `findings`, in
+that order. The fields for this check follow it. Keys are camelCase. Here is
+the feature-module failure from the tests, pretty-printed (the tool prints it
+on one line):
 
 ```json
 {
-  "schema_version": 1,
-  "tool_version": "1.1.0",
+  "schemaVersion": 1,
+  "tool": {"name": "alignmint", "version": "1.1.0"},
+  "exitCode": 1,
+  "summary": {"error": 1, "warning": 0, "info": 0},
+  "findings": [
+    {"id": "library-unaligned", "severity": "error",
+     "message": "feature_camera/lib/arm64-v8a/libcamera.so: LOAD segments aligned to 2**12, below the 2**14 that 16 KB pages need.",
+     "path": "app-release.aab"}
+  ],
+  "verdict": "unaligned",
+  "reason": "at least one 64-bit library is not 16 KB aligned.",
   "artifact": "app-release.aab",
   "kind": "aab",
   "tools": {"objdump": "/path/to/llvm-objdump", "archive": "bundletool"},
-  "archive": {"check": "bundle_config", "status": "ok",
+  "archive": {"check": "bundleConfig", "status": "ok",
               "detail": "bundle config declares PAGE_ALIGNMENT_16K"},
   "libraries": [
     {"module": "base", "abi": "arm64-v8a", "name": "libexample.so",
      "path": "base/lib/arm64-v8a/libexample.so", "status": "ok",
-     "min_align_log2": 14, "reason": null},
-    {"module": "base", "abi": "armeabi-v7a", "name": null,
-     "path": "base/lib/armeabi-v7a", "status": "skip",
-     "min_align_log2": null, "reason": "32-bit", "library_count": 1},
+     "minAlignLog2": 14, "relro": {"status": "notChecked"}},
+    {"module": "base", "abi": "armeabi-v7a", "path": "base/lib/armeabi-v7a",
+     "status": "skip", "reason": "32-bit", "libraryCount": 1},
     {"module": "feature_camera", "abi": "arm64-v8a", "name": "libcamera.so",
      "path": "feature_camera/lib/arm64-v8a/libcamera.so", "status": "fail",
-     "min_align_log2": 12, "reason": "min align 2**12, below 2**14"},
-    {"module": "feature_camera", "abi": "armeabi-v7a", "name": null,
+     "minAlignLog2": 12, "reason": "min align 2**12, below 2**14",
+     "relro": {"status": "notChecked"}},
+    {"module": "feature_camera", "abi": "armeabi-v7a",
      "path": "feature_camera/lib/armeabi-v7a", "status": "skip",
-     "min_align_log2": null, "reason": "32-bit", "library_count": 1}
+     "reason": "32-bit", "libraryCount": 1}
   ],
-  "verdict": "unaligned",
-  "exit_code": 1,
-  "reason": "at least one 64-bit library is not 16 KB aligned.",
   "hints": ["A failure is usually a prebuilt .so shipped inside a dependency, built with an older NDK; upgrade or drop the dependency that owns it."]
 }
 ```
 
 | field | meaning |
 |---|---|
-| `schema_version` | `1`. Raised only when a field is removed, renamed or changes meaning; new fields can appear without it changing, so ignore keys you do not know. |
-| `tool_version` | The `android-16kb-check` version that wrote it. |
+| `schemaVersion` | `1`. Raised only when a field is removed, renamed or changes meaning; new fields can appear without it changing, so ignore keys you do not know. |
+| `tool` | `{"name": "alignmint", "version": ...}`, the version of the script that wrote it. |
+| `exitCode` | The process exit code: 0, 1 or 2. |
+| `summary` | `{"error", "warning", "info"}`: how many findings have each severity. |
+| `findings` | One entry per problem found, each with `id` (stable, see below), `severity` (`error`, `warning` or `info`), `message`, and `path`, the artifact, once one was named. Empty when aligned with nothing to report. |
+| `verdict` | `"aligned"` (exit 0), `"unaligned"` (exit 1) or `"unverified"` (exit 2). |
+| `reason` | Why the verdict is not `aligned`: the `FAIL —` or `CANNOT VERIFY —` line of the text report. `null` when aligned. |
 | `artifact` | The path as given on the command line, or `null` if the run stopped before one was known. |
 | `kind` | `"apk"`, `"aab"`, or `null` if the run stopped before that was known. |
 | `tools` | `objdump` and `archive` (bundletool for an AAB, zipalign for an APK), as the text report's header names them; `null` for one that was not resolved. |
-| `archive` | The archive-alignment check: `check` is `"bundle_config"` or `"zipalign"`, `status` is `"ok"` or `"fail"`, `detail` is the text report's line. `null` if the run stopped before the check gave an answer. |
+| `archive` | The archive-alignment check: `check` is `"bundleConfig"` or `"zipalign"`, `status` is `"ok"` or `"fail"`, `detail` is the text report's line. `null` if the run stopped before the check gave an answer. |
 | `libraries` | One entry per line of the ELF section of the text report, in the same order. Empty if the run stopped before it. |
-| `verdict` | `"aligned"` (exit 0), `"unaligned"` (exit 1) or `"unverified"` (exit 2). |
-| `exit_code` | The process exit code. |
-| `reason` | Why the verdict is not `aligned`: the `FAIL —` or `CANNOT VERIFY —` line of the text report. `null` when aligned. |
 | `hints` | What to do next, as a list of strings; empty when aligned. Each string is one whole sentence or paragraph: for `unverified` these are the lines the text report prints under `CANNOT VERIFY`, with the lines it wraps for the terminal joined back together. |
 
-Each entry in `libraries`:
+Each entry in `libraries` is either a 64-bit library (`ok` or `fail`) or a
+whole ABI directory (`skip` or `none`). Keys that do not apply are left out.
 
 | field | meaning |
 |---|---|
 | `module` | The AAB module (`"base"`, `"feature_camera"`, ...). `null` for an APK. |
 | `abi` | `"arm64-v8a"`, `"armeabi-v7a"`, ... |
-| `name` | The library's file name. `null` for `skip` and `none`, which describe a whole ABI directory. |
-| `path` | Path inside the archive: the library, or the ABI directory for `skip` and `none`. |
+| `name` | Libraries only: the file name. |
+| `path` | Path inside the archive: the library, or the ABI directory. |
 | `status` | `"ok"`, `"fail"`, `"skip"` (32-bit, exempt) or `"none"` (a 64-bit ABI directory holding no `.so`), matching `[ok]`, `[FAIL]`, `[SKIP]` and `[none]` in the text report. |
-| `min_align_log2` | The lowest LOAD segment alignment as a power of two (`14` is 16 KB). `null` when nothing was read: `skip`, `none`, or a `fail` with no readable LOAD segments. |
-| `reason` | Why it is not `ok`, or `null`. |
-| `library_count` | Only on `skip` and `none`: how many `.so` files the directory holds. |
+| `minAlignLog2` | Libraries only: the lowest LOAD segment alignment as a power of two (`14` is 16 KB), or `null` when no LOAD segment could be read. |
+| `reason` | Why it is not `ok`. Left out for `ok`. |
+| `relro` | Libraries only: `{"status": "notChecked"}`. This script does not check GNU_RELRO yet; the field is there so that a later check can fill it in without changing the shape. |
+| `libraryCount` | `skip` and `none` only: how many `.so` files the directory holds. |
+
+### Finding ids
+
+The ids are stable: a script can match on them, and they will not be renamed
+without a new `schemaVersion`. A 32-bit ABI directory is not a finding; it is
+reported in `libraries` with status `skip`.
+
+| id | severity | verdict | when |
+|---|---|---|---|
+| `library-unaligned` | error | unaligned | A 64-bit library has a LOAD segment aligned below `2**14`. One finding per library; the message names it. |
+| `library-no-load` | error | unaligned | objdump read a 64-bit library but found no readable LOAD segment in it. |
+| `archive-unaligned` | error | unaligned | The bundle config does not declare `PAGE_ALIGNMENT_16K`, or zipalign reports the APK is not 16 KB aligned. |
+| `abi-without-libraries` | warning | any | A 64-bit ABI directory holds no `.so` (the `[none]` line). If no other 64-bit library was read either, `nothing-measured` follows. |
+| `option-invalid` | error | unverified | An unknown option, an option missing its value, or more than one artifact. |
+| `artifact-missing` | error | unverified | No artifact was given, or the path does not exist. |
+| `artifact-invalid` | error | unverified | The path is not a regular file, or does not end in `.apk` or `.aab`. |
+| `tool-missing` | error | unverified | A required tool was not found: llvm-objdump (including under the NDK named by `--ndk` or `ANDROID_NDK_HOME`), bundletool, java for a bundletool `.jar`, zipalign or unzip. |
+| `tool-failed` | error | unverified | A tool was found but could not do its check: zipalign exited with something other than 0 or 1, or objdump could not read a library. |
+| `archive-unreadable` | error | unverified | bundletool could not read the bundle config, or unzip could not list or fully extract the native libraries. |
+| `no-native-libraries` | error | unverified | The artifact has no native libraries at all. |
+| `32-bit-only` | error | unverified | The artifact has only 32-bit ABIs, so there is nothing to check. |
+| `nothing-measured` | error | unverified | There is a 64-bit ABI directory, but no 64-bit library was read. |
 
 Every run that exits `2`, including an unknown option, a missing artifact and
 a missing toolchain, still prints the object, with `"verdict": "unverified"`.
@@ -354,7 +389,9 @@ test/run.sh toolchain      # a substring filter on test names
 The suite needs no Android SDK and no real APK. External tools are replaced by
 stubs in `test/stubs`, and the artifacts by small archives in `test/fixtures`
 that have the right internal layout and nothing else. The text report is
-pinned byte for byte by the transcripts in `test/golden`. `shellcheck` runs over
+pinned byte for byte by the transcripts in `test/golden`. Where `python3` is
+installed, `test/check-json.py` also checks each `--format json` result
+strictly; neither the script nor the suite needs Python. `shellcheck` runs over
 the script, the harness and the stubs in CI.
 
 ## Contributing

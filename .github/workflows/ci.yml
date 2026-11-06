@@ -53,8 +53,9 @@ jobs:
 
       # test/run.sh checks the JSON shape with bash alone, since neither the
       # script nor the suite may need Python. Here, where Python is to hand,
-      # a few --format json runs are parsed strictly: json.tool rejects
-      # anything that is not exactly one JSON document. The stubs stand in
+      # a few --format json runs are parsed strictly: test/check-json.py
+      # rejects anything that is not exactly one JSON object, and checks the
+      # envelope (field order, summary counts, verdict against exit code). The stubs stand in
       # for the toolchain, and the runner's own Android SDK is hidden so the
       # exit codes are the ones the stubs decide.
       - name: --format json output parses
@@ -66,7 +67,7 @@ jobs:
             local want="$1" rc=0
             shift
             env "$@" --format json > "$RUNNER_TEMP/out.json" 2> /dev/null || rc=$?
-            python3 -m json.tool "$RUNNER_TEMP/out.json" > /dev/null
+            python3 -I test/check-json.py < "$RUNNER_TEMP/out.json"
             echo "exit $rc: $*"
             if [ "$rc" -ne "$want" ]; then
               echo "::error::expected exit $want, got $rc: $*"

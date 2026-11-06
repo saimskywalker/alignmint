@@ -15,11 +15,14 @@ looks barely different.
 - `--format json` (also `--format=json`) prints the result as one JSON object
   on stdout, for CI jobs and scripts that need to know which library failed
   without scraping the text report. The text report moves to stderr in that
-  mode. The exit codes are unchanged, and every exit `2` still prints the
-  object, with `"verdict": "unverified"` and the reason. The shape, with its
-  `schema_version`, is in the README under "Machine-readable output".
-  `--format text` is the default and its output has not changed; the test
-  suite now pins it byte for byte.
+  mode. The object opens with the envelope shared with storehound and
+  husk_sdk (`schemaVersion`, `tool`, `exitCode`, `summary`, `findings` with
+  stable ids), followed by `verdict`, `reason`, `libraries` and the other
+  fields for this check, all in camelCase. The exit codes are unchanged, and
+  every exit `2` still prints the object, with `"verdict": "unverified"` and
+  the reason. The shape and the finding ids are in the README under
+  "Machine-readable output". `--format text` is the default and its output
+  has not changed; the test suite now pins it byte for byte.
   ([#25](https://github.com/saimskywalker/alignmint/issues/25))
 
 ### Changed

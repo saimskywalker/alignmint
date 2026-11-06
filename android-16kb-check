@@ -90,15 +90,18 @@ EOF
 # Every "cannot verify" path funnels through here so the distinction between
 # "unaligned" and "unproven" can never be blurred by a stray exit 1.
 #
-# With --format json it also emits the JSON result, verdict "unverified",
-# with $1 as the reason and the remaining lines as hints.
+# $1 is a stable id for the cause, used only by --format json (see "Finding
+# ids" in the README); $2 is the reason and the rest are explanation lines.
+# With --format json it also emits the JSON result, verdict "unverified".
 cannot_verify() {
+  local id="$1" line
+  shift
   printf '%s: CANNOT VERIFY — %s\n' "${PROGRAM}" "$1" >&2
-  local line
   for line in "${@:2}"; do
     printf '  %s\n' "${line}" >&2
   done
   printf '  Exit code 2 means unproven, not passed.\n' >&2
+  add_finding "${id}" error "$1"
   finish unverified "${EXIT_CANNOT_VERIFY}" "$@"
 }
 
@@ -107,17 +110,26 @@ cannot_verify() {
 # changing a byte of the text report. Plain bash 3.2, no jq or python: the
 # script has to run on the /bin/bash macOS ships.
 #
+# The object opens with the envelope shared by the tools in this family
+# (schemaVersion, tool, exitCode, summary, findings), and the fields that are
+# specific to this check follow it. Keys are camelCase.
+#
 # With json, file descriptor 3 is the real stdout and carries only the JSON
 # object; fd 1 is pointed at stderr once the options are parsed, so nothing
 # the text report prints can end up in front of or behind the object.
 
 OUTPUT_FORMAT="text"
 JSON_SCHEMA_VERSION=1
+JSON_TOOL_NAME="alignmint"
 KIND=""
 OBJDUMP=""
 ARCHIVE_CMD=""      # the archive tool as the header names it
 ARCHIVE_JSON="null" # the archive check's result, once it has one
 LIB_JSON=""         # the library records, comma-separated
+FINDINGS_JSON=""    # the findings, comma-separated
+COUNT_ERROR=0
+COUNT_WARNING=0
+COUNT_INFO=0
 
 # JSON string literal for $1 into the variable named $2. The locals carry a
 # prefix so that the caller's variable name cannot be one of them.
@@ -152,28 +164,58 @@ json_or_null() {
   fi
 }
 
-# One record per library, or per ABI directory for skip and none.
-#   $1 module ("" for an APK)  $2 abi  $3 library name ("" for a directory)
-#   $4 path in the archive     $5 status: ok, fail, skip or none
-#   $6 lowest LOAD alignment exponent ("" if none was read)
-#   $7 reason ("" for ok)      $8 number of .so files, for skip and none
+# One finding: $1 stable id, $2 severity (error, warning or info), $3 message.
+# Its path is the artifact, once one has been named.
+add_finding() {
+  [[ "${OUTPUT_FORMAT}" == "json" ]] || return 0
+  local msg path rec
+  json_quote "$3" msg
+  rec="{\"id\":\"$1\",\"severity\":\"$2\",\"message\":${msg}"
+  if [[ -n "${ARTIFACT:-}" ]]; then
+    json_quote "${ARTIFACT}" path
+    rec+=",\"path\":${path}"
+  fi
+  FINDINGS_JSON+="${FINDINGS_JSON:+,}${rec}}"
+  case "$2" in
+    error) COUNT_ERROR=$(( COUNT_ERROR + 1 )) ;;
+    warning) COUNT_WARNING=$(( COUNT_WARNING + 1 )) ;;
+    *) COUNT_INFO=$(( COUNT_INFO + 1 )) ;;
+  esac
+}
+
+# One record per 64-bit library: $1 module ("" for an APK), $2 abi,
+# $3 library name, $4 path in the archive, $5 status (ok or fail), $6 lowest
+# LOAD alignment exponent ("" if none was read), $7 reason ("" for ok).
+# RELRO is not checked by this script yet, so every library says notChecked.
 add_lib() {
   [[ "${OUTPUT_FORMAT}" == "json" ]] || return 0
   local m a n p r rec
   json_or_null "$1" m
   json_quote "$2" a
-  json_or_null "$3" n
+  json_quote "$3" n
   json_quote "$4" p
-  json_or_null "$7" r
   rec="{\"module\":${m},\"abi\":${a},\"name\":${n},\"path\":${p},\"status\":\"$5\""
-  rec+=",\"min_align_log2\":${6:-null},\"reason\":${r}"
-  if [[ -n "${8:-}" ]]; then
-    rec+=",\"library_count\":$8"
+  rec+=",\"minAlignLog2\":${6:-null}"
+  if [[ -n "$7" ]]; then
+    json_quote "$7" r
+    rec+=",\"reason\":${r}"
   fi
-  LIB_JSON+="${LIB_JSON:+,}${rec}}"
+  LIB_JSON+="${LIB_JSON:+,}${rec},\"relro\":{\"status\":\"notChecked\"}}"
 }
 
-# $1 check (bundle_config or zipalign), $2 status (ok or fail), $3 detail.
+# One record for an ABI directory as a whole: $1 module, $2 abi, $3 path in
+# the archive, $4 status (skip or none), $5 reason, $6 number of .so files.
+add_abi_dir() {
+  [[ "${OUTPUT_FORMAT}" == "json" ]] || return 0
+  local m a p r
+  json_or_null "$1" m
+  json_quote "$2" a
+  json_quote "$3" p
+  json_quote "$5" r
+  LIB_JSON+="${LIB_JSON:+,}{\"module\":${m},\"abi\":${a},\"path\":${p},\"status\":\"$4\",\"reason\":${r},\"libraryCount\":$6}"
+}
+
+# $1 check (bundleConfig or zipalign), $2 status (ok or fail), $3 detail.
 set_archive() {
   [[ "${OUTPUT_FORMAT}" == "json" ]] || return 0
   local d
@@ -190,9 +232,10 @@ set_archive() {
 # indented command, "-P flag: ..."), and is joined to it with one space.
 # Write new cannot_verify lines to that rule.
 emit_json() {
-  local verdict="$1" code="$2" reason artifact kind objdump archive line
+  local verdict="$1" code="$2" reason tool_version artifact kind objdump archive line
   local hint="" quoted hints=""
   json_or_null "$3" reason
+  json_quote "${VERSION}" tool_version
   json_or_null "${ARTIFACT:-}" artifact
   json_or_null "${KIND}" kind
   json_or_null "${OBJDUMP}" objdump
@@ -215,9 +258,16 @@ emit_json() {
     json_quote "${hint}" quoted
     hints+="${hints:+,}${quoted}"
   fi
-  printf '{"schema_version":%s,"tool_version":"%s","artifact":%s,"kind":%s,"tools":{"objdump":%s,"archive":%s},"archive":%s,"libraries":[%s],"verdict":"%s","exit_code":%s,"reason":%s,"hints":[%s]}\n' \
-    "${JSON_SCHEMA_VERSION}" "${VERSION}" "${artifact}" "${kind}" "${objdump}" "${archive}" \
-    "${ARCHIVE_JSON}" "${LIB_JSON}" "${verdict}" "${code}" "${reason}" "${hints}" >&3
+  {
+    printf '{"schemaVersion":%s,"tool":{"name":"%s","version":%s},"exitCode":%s' \
+      "${JSON_SCHEMA_VERSION}" "${JSON_TOOL_NAME}" "${tool_version}" "${code}"
+    printf ',"summary":{"error":%s,"warning":%s,"info":%s},"findings":[%s]' \
+      "${COUNT_ERROR}" "${COUNT_WARNING}" "${COUNT_INFO}" "${FINDINGS_JSON}"
+    printf ',"verdict":"%s","reason":%s,"artifact":%s,"kind":%s' \
+      "${verdict}" "${reason}" "${artifact}" "${kind}"
+    printf ',"tools":{"objdump":%s,"archive":%s},"archive":%s,"libraries":[%s],"hints":[%s]}\n' \
+      "${objdump}" "${archive}" "${ARCHIVE_JSON}" "${LIB_JSON}" "${hints}"
+  } >&3
 }
 
 # Every exit with a verdict goes through here: $1 verdict, $2 exit code,
@@ -254,7 +304,7 @@ need_value() {
   # auto-detection after being told which toolchain to use. That is the
   # silent-fallback failure this tool exists to refuse.
   if (( $2 == 0 )) || [[ -z "${3:-}" ]]; then
-    cannot_verify "$1 requires a value." "Run ${PROGRAM} --help for usage."
+    cannot_verify option-invalid "$1 requires a value." "Run ${PROGRAM} --help for usage."
   fi
 }
 
@@ -297,8 +347,8 @@ fi
 check_format() {
   case "$1" in
     text|json) ;;
-    "") cannot_verify "--format requires a value." "Run ${PROGRAM} --help for usage." ;;
-    *) cannot_verify "unknown --format value: $1" "Expected text or json." ;;
+    "") cannot_verify option-invalid "--format requires a value." "Run ${PROGRAM} --help for usage." ;;
+    *) cannot_verify option-invalid "unknown --format value: $1" "Expected text or json." ;;
   esac
 }
 
@@ -314,13 +364,13 @@ while (( $# )); do
     -V|--version) printf '%s %s\n' "${PROGRAM}" "${VERSION}"; exit "${EXIT_ALIGNED}" ;;
     --ndk) need_value --ndk $(( $# - 1 )) "${2:-}"; NDK_DIR="$2"; NDK_SOURCE="--ndk"; shift ;;
     --ndk=*) NDK_DIR="${1#--ndk=}"; NDK_SOURCE="--ndk"
-             [[ -n "${NDK_DIR}" ]] || cannot_verify "--ndk requires a value." ;;
+             [[ -n "${NDK_DIR}" ]] || cannot_verify option-invalid "--ndk requires a value." ;;
     --bundletool) need_value --bundletool $(( $# - 1 )) "${2:-}"; BUNDLETOOL_SPEC="$2"; shift ;;
     --bundletool=*) BUNDLETOOL_SPEC="${1#--bundletool=}"
-                    [[ -n "${BUNDLETOOL_SPEC}" ]] || cannot_verify "--bundletool requires a value." ;;
+                    [[ -n "${BUNDLETOOL_SPEC}" ]] || cannot_verify option-invalid "--bundletool requires a value." ;;
     --format) need_value --format $(( $# - 1 )) "${2:-}"; check_format "$2"; shift ;;
     --format=*) check_format "${1#--format=}" ;;
-    -*) cannot_verify "unknown option: $1" "Run ${PROGRAM} --help for usage." ;;
+    -*) cannot_verify option-invalid "unknown option: $1" "Run ${PROGRAM} --help for usage." ;;
     *) positional+=("$1") ;;
   esac
   shift
@@ -332,28 +382,28 @@ if [[ "${OUTPUT_FORMAT}" == "json" ]]; then
 fi
 
 if (( ${#positional[@]} == 0 )); then
-  cannot_verify "no artifact given." \
+  cannot_verify artifact-missing "no artifact given." \
     "Usage: ${PROGRAM} [options] <path-to.apk|path-to.aab>" \
     "Run ${PROGRAM} --help for the full option list."
 fi
 if (( ${#positional[@]} > 1 )); then
-  cannot_verify "expected exactly one artifact, got ${#positional[@]}." \
+  cannot_verify option-invalid "expected exactly one artifact, got ${#positional[@]}." \
     "Extra arguments: ${positional[*]:1}"
 fi
 ARTIFACT="${positional[0]}"
 
 if [[ ! -e "${ARTIFACT}" ]]; then
-  cannot_verify "artifact not found: ${ARTIFACT}" \
+  cannot_verify artifact-missing "artifact not found: ${ARTIFACT}" \
     "Build one first, then point this tool at the .aab or .apk it produced."
 fi
 if [[ ! -f "${ARTIFACT}" ]]; then
-  cannot_verify "not a regular file: ${ARTIFACT}"
+  cannot_verify artifact-invalid "not a regular file: ${ARTIFACT}"
 fi
 
 case "${ARTIFACT}" in
   *.aab) KIND=aab ;;
   *.apk) KIND=apk ;;
-  *) cannot_verify "expected a .aab or .apk, got: ${ARTIFACT}" \
+  *) cannot_verify artifact-invalid "expected a .aab or .apk, got: ${ARTIFACT}" \
        "The check reads the archive layout, which differs between the two." ;;
 esac
 
@@ -361,7 +411,7 @@ esac
 # Everything is resolved up front. Failing after half the work is done invites
 # reading a partial report as a result.
 
-command -v unzip >/dev/null 2>&1 || cannot_verify "unzip not found on PATH." \
+command -v unzip >/dev/null 2>&1 || cannot_verify tool-missing "unzip not found on PATH." \
   "It is needed to read the native libraries out of the archive." \
   "Debian/Ubuntu: apt-get install unzip    macOS: preinstalled"
 
@@ -436,7 +486,7 @@ if [[ -n "${NDK_DIR}" ]]; then
   # An explicitly named NDK is authoritative. Silently falling back to some
   # other objdump would report on a toolchain nobody asked for.
   if ! OBJDUMP="$(objdump_in_ndk "${NDK_DIR}")"; then
-    cannot_verify "no llvm-objdump under the NDK named by ${NDK_SOURCE}: ${NDK_DIR}" \
+    cannot_verify tool-missing "no llvm-objdump under the NDK named by ${NDK_SOURCE}: ${NDK_DIR}" \
       "Expected ${NDK_DIR}/toolchains/llvm/prebuilt/<host>/bin/llvm-objdump" \
       "Install it with: sdkmanager 'ndk;28.2.13676358'" \
       "$(if [[ "${NDK_SOURCE}" == "--ndk" ]]; then
@@ -457,7 +507,7 @@ if [[ -z "${OBJDUMP}" ]]; then
 fi
 
 if [[ -z "${OBJDUMP}" ]]; then
-  cannot_verify "no llvm-objdump found." \
+  cannot_verify tool-missing "no llvm-objdump found." \
     "It ships with the Android NDK. Install one:" \
     "    sdkmanager 'ndk;28.2.13676358'" \
     "Then set ANDROID_HOME (or pass --ndk /path/to/ndk/28.2.13676358)." \
@@ -471,10 +521,10 @@ if [[ "${KIND}" == "aab" ]]; then
   if [[ -n "${BUNDLETOOL_SPEC}" ]]; then
     case "${BUNDLETOOL_SPEC}" in
       *.jar)
-        command -v java >/dev/null 2>&1 || cannot_verify \
+        command -v java >/dev/null 2>&1 || cannot_verify tool-missing \
           "bundletool was given as a .jar but java is not on PATH." \
           "Install a JDK, or point --bundletool at a launcher script instead."
-        [[ -f "${BUNDLETOOL_SPEC}" ]] || cannot_verify \
+        [[ -f "${BUNDLETOOL_SPEC}" ]] || cannot_verify tool-missing \
           "bundletool jar not found: ${BUNDLETOOL_SPEC}"
         BUNDLETOOL_CMD=(java -jar "${BUNDLETOOL_SPEC}")
         ;;
@@ -484,14 +534,14 @@ if [[ "${KIND}" == "aab" ]]; then
         elif command -v "${BUNDLETOOL_SPEC}" >/dev/null 2>&1; then
           BUNDLETOOL_CMD=("${BUNDLETOOL_SPEC}")
         else
-          cannot_verify "bundletool not executable: ${BUNDLETOOL_SPEC}"
+          cannot_verify tool-missing "bundletool not executable: ${BUNDLETOOL_SPEC}"
         fi
         ;;
     esac
   elif command -v bundletool >/dev/null 2>&1; then
     BUNDLETOOL_CMD=(bundletool)
   else
-    cannot_verify "bundletool not found on PATH." \
+    cannot_verify tool-missing "bundletool not found on PATH." \
       "It reads the bundle config, which is where an AAB records its" \
       "archive alignment. Install it:" \
       "    brew install bundletool" \
@@ -509,7 +559,7 @@ else
     ZIPALIGN="$(command -v zipalign 2>/dev/null || true)"
   fi
   if [[ -z "${ZIPALIGN}" ]]; then
-    cannot_verify "zipalign not found." \
+    cannot_verify tool-missing "zipalign not found." \
       "It ships in the Android SDK build-tools and is what proves an APK's" \
       "native libraries are stored 16 KB-aligned inside the zip." \
       "    sdkmanager 'build-tools;35.0.0'" \
@@ -545,12 +595,12 @@ if [[ "${KIND}" == "aab" ]]; then
   # stderr is dropped on purpose: recent JDKs print a sun.misc.Unsafe
   # deprecation warning from bundletool's bundled protobuf on every call.
   if ! config="$("${BUNDLETOOL_CMD[@]}" dump config --bundle="${ARTIFACT}" 2>/dev/null)"; then
-    cannot_verify "bundletool could not read ${ARTIFACT}." \
+    cannot_verify archive-unreadable "bundletool could not read ${ARTIFACT}." \
       "Is it really an app bundle? bundletool dump config failed."
   fi
   if printf '%s\n' "${config}" | grep -q 'PAGE_ALIGNMENT_16K'; then
     printf '    [ok]   bundle config declares PAGE_ALIGNMENT_16K\n'
-    set_archive bundle_config ok "bundle config declares PAGE_ALIGNMENT_16K"
+    set_archive bundleConfig ok "bundle config declares PAGE_ALIGNMENT_16K"
   else
     printf '    [FAIL] bundle config does NOT declare PAGE_ALIGNMENT_16K\n' >&2
     printf '           uncompressNativeLibraries block was:\n' >&2
@@ -559,7 +609,9 @@ if [[ "${KIND}" == "aab" ]]; then
     printf '\n' >&2
     printf 'FAIL — the bundle is not storing native libraries 16 KB-aligned.\n' >&2
     printf '  This comes from the Android Gradle Plugin. Upgrade to AGP 8.5.1 or newer.\n' >&2
-    set_archive bundle_config fail "bundle config does NOT declare PAGE_ALIGNMENT_16K"
+    set_archive bundleConfig fail "bundle config does NOT declare PAGE_ALIGNMENT_16K"
+    add_finding archive-unaligned error \
+      "the bundle config does not declare PAGE_ALIGNMENT_16K, so native libraries are not stored 16 KB-aligned."
     finish unaligned "${EXIT_UNALIGNED}" \
       "the bundle is not storing native libraries 16 KB-aligned." \
       "This comes from the Android Gradle Plugin. Upgrade to AGP 8.5.1 or newer."
@@ -583,11 +635,13 @@ else
     printf 'FAIL — native libraries are not stored 16 KB-aligned in the zip.\n' >&2
     printf '  This comes from the Android Gradle Plugin. Upgrade to AGP 8.5.1 or newer.\n' >&2
     set_archive zipalign fail "zipalign reports the APK is not 16 KB aligned"
+    add_finding archive-unaligned error \
+      "zipalign -c -P 16 4 reports that native libraries are not stored 16 KB-aligned in the zip."
     finish unaligned "${EXIT_UNALIGNED}" \
       "native libraries are not stored 16 KB-aligned in the zip." \
       "This comes from the Android Gradle Plugin. Upgrade to AGP 8.5.1 or newer."
   else
-    cannot_verify "zipalign could not perform the check (exit ${zipalign_status})." \
+    cannot_verify tool-failed "zipalign could not perform the check (exit ${zipalign_status})." \
       "It returns 1 when it has read the archive and found it misaligned;" \
       "any other status means it never got that far, so nothing was measured." \
       "The usual cause is build-tools older than 35, whose zipalign has no" \
@@ -629,7 +683,7 @@ if [[ "${KIND}" == "aab" ]]; then
   # pattern would pull in base/assets/lib/... or anything else with a lib/
   # somewhere in its path. BUNDLE-METADATA/ and META-INF/ are not modules.
   if ! listing="$(unzip -Z1 "${ARTIFACT}" 2>/dev/null)"; then
-    cannot_verify "unzip could not list the entries of ${ARTIFACT}." \
+    cannot_verify archive-unreadable "unzip could not list the entries of ${ARTIFACT}." \
       "Without the entry list there is no way to know which modules carry" \
       "native libraries, so none of them were measured." \
       "Usual causes: a truncated or corrupt archive."
@@ -665,7 +719,7 @@ else
 fi
 
 no_native_libraries() {
-  cannot_verify "no native libraries found in the artifact." \
+  cannot_verify no-native-libraries "no native libraries found in the artifact." \
     "${NO_LIBS_HINT}" \
     "Either this is the wrong file, or the build produced no .so at all." \
     "An app with no native code has nothing for this check to measure."
@@ -688,7 +742,7 @@ unzip_status=0
 unzip -q "${ARTIFACT}" "${LIB_PATTERNS[@]}" -d "${WORK}" >/dev/null 2>&1 || unzip_status=$?
 case "${unzip_status}" in
   0|1|11) ;;
-  *) cannot_verify "unzip could not read every native-library entry out of the artifact (exit ${unzip_status})." \
+  *) cannot_verify archive-unreadable "unzip could not read every native-library entry out of the artifact (exit ${unzip_status})." \
        "Part of the archive was skipped, so a verdict here would cover some" \
        "of the native libraries rather than all of them." \
        "Usual causes: a compression method this unzip does not support, a" \
@@ -702,7 +756,7 @@ for root in "${LIB_ROOTS[@]}"; do
     fi
     # The AAB listing named this module, so its libraries exist; if they did
     # not come out, the rest of the tree is a subset of the bundle.
-    cannot_verify "the archive lists ${root}/ but nothing under it was extracted." \
+    cannot_verify archive-unreadable "the archive lists ${root}/ but nothing under it was extracted." \
       "A verdict on the other modules would not cover this one."
   fi
 done
@@ -727,7 +781,7 @@ check_lib_root() {
     if [[ "${abi}" != *64* ]]; then
       n="$(find "${abi_dir}" -name '*.so' | wc -l | tr -d ' ')"
       printf '    %-14s [SKIP] 32-bit, exempt (%s libs)\n' "${label}${abi}" "${n}"
-      add_lib "${module}" "${abi}" "" "${in_archive}/${abi}" skip "" "32-bit" "${n}"
+      add_abi_dir "${module}" "${abi}" "${in_archive}/${abi}" skip "32-bit" "${n}"
       continue
     fi
     abis64=$(( abis64 + 1 ))
@@ -762,7 +816,7 @@ check_lib_root() {
       # Collapsing the second into the first reports "Play will reject this
       # upload" about a library the tool never managed to look at.
       if ! raw="$("${OBJDUMP}" -p "${so}" 2>/dev/null)"; then
-        cannot_verify "${OBJDUMP##*/} could not read ${label}${abi}/${so_name}." \
+        cannot_verify tool-failed "${OBJDUMP##*/} could not read ${label}${abi}/${so_name}." \
           "Command: ${OBJDUMP} -p <${so_name}>" \
           "Nothing was measured for this library, so the artifact is unproven." \
           "Check that the objdump above runs on this machine, and that the" \
@@ -786,11 +840,15 @@ EOF
         printf '    %s [FAIL] no LOAD segments readable\n' "${where}" >&2
         add_lib "${module}" "${abi}" "${so_name}" "${in_archive}/${abi}/${so_name}" \
           fail "" "no LOAD segments readable"
+        add_finding library-no-load error \
+          "${in_archive}/${abi}/${so_name}: objdump read the library but found no readable LOAD segments."
         fail=1
       elif (( worst < 14 )); then
         printf '    %s [FAIL] min align 2**%s\n' "${where}" "${worst}" >&2
         add_lib "${module}" "${abi}" "${so_name}" "${in_archive}/${abi}/${so_name}" \
           fail "${worst}" "min align 2**${worst}, below 2**14"
+        add_finding library-unaligned error \
+          "${in_archive}/${abi}/${so_name}: LOAD segments aligned to 2**${worst}, below the 2**14 that 16 KB pages need."
         fail=1
       else
         printf '    %s [ok]   min align 2**%s\n' "${where}" "${worst}"
@@ -805,8 +863,10 @@ EOF
     # does occur.
     if (( in_this_abi == 0 )); then
       printf '    %-14s [none] directory present but holds no .so\n' "${label}${abi}" >&2
-      add_lib "${module}" "${abi}" "" "${in_archive}/${abi}" none "" \
+      add_abi_dir "${module}" "${abi}" "${in_archive}/${abi}" none \
         "directory present but holds no .so" 0
+      add_finding abi-without-libraries warning \
+        "${in_archive}/${abi}/ is a 64-bit ABI directory that holds no .so, so nothing in it was measured."
     fi
   done
 }
@@ -820,7 +880,7 @@ done
 
 printf '\n'
 if (( abis64 == 0 )); then
-  cannot_verify "the artifact contains no 64-bit ABI, so there is nothing to check." \
+  cannot_verify 32-bit-only "the artifact contains no 64-bit ABI, so there is nothing to check." \
     "16 KB pages only apply to arm64-v8a and x86_64." \
     "A 32-bit-only build is not proof of anything about the 64-bit one."
 fi
@@ -828,7 +888,7 @@ fi
 # nothing. Reporting PASS here would be the exact failure this tool exists to
 # refuse: a green result from an artifact that was never measured.
 if (( measured == 0 )); then
-  cannot_verify "no 64-bit library was read, so nothing was measured." \
+  cannot_verify nothing-measured "no 64-bit library was read, so nothing was measured." \
     "The artifact has a 64-bit ABI directory, but it contains no .so files." \
     "Either this is not the artifact you meant to check, or its 64-bit" \
     "native code is missing. Neither is evidence of alignment."
