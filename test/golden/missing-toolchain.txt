@@ -1,0 +1,9 @@
+--- exit 2
+--- stdout
+--- stderr
+android-16kb-check: CANNOT VERIFY — no llvm-objdump found.
+  It ships with the Android NDK. Install one:
+      sdkmanager 'ndk;28.2.13676358'
+  Then set ANDROID_HOME (or pass --ndk /path/to/ndk/28.2.13676358).
+  GNU objdump on PATH also works if you have binutils.
+  Exit code 2 means unproven, not passed.

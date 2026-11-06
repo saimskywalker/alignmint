@@ -161,12 +161,16 @@ android-16kb-check --ndk "$ANDROID_HOME/ndk/28.2.13676358" app-release.aab
 
 # bundletool as a downloaded jar instead of a PATH executable
 android-16kb-check --bundletool ~/tools/bundletool-all.jar app-release.aab
+
+# One JSON object on stdout for a script to read; the text report goes to stderr
+android-16kb-check --format json app-release.aab > alignment.json
 ```
 
 | option | effect |
 |---|---|
 | `--ndk <dir>` | Take `llvm-objdump` from this NDK. Overrides auto-detection; if the directory has no `llvm-objdump` the run fails rather than falling back to some other one. An empty value is an error, not "no `--ndk` given" — `--ndk "$UNSET_VAR"` must not silently become auto-detection. |
 | `--bundletool <cmd>` | Executable, or a path ending in `.jar` which is run as `java -jar`. AAB only. An empty value is an error, as for `--ndk`. |
+| `--format <text\|json>` | `text` (the default) is the report shown above. `json` prints one JSON object on stdout instead and moves the text report to stderr; see [Machine-readable output](#machine-readable-output). `--format=json` works too. The exit codes are the same in both. |
 | `-h`, `--help` | Usage, then exit 0. |
 | `-V`, `--version` | Version, then exit 0. |
 
@@ -200,6 +204,85 @@ Any non-zero exit fails the step, including `2`, because Actions runs `run:`
 blocks with `bash -e`. On a release job that is what you want: a gate that
 could not run should not let the build through. If you would rather keep `2`
 as a warning, use the `case` pattern from [Exit codes](#exit-codes).
+
+## Machine-readable output
+
+`--format json` is for CI jobs, pull request comments and dashboards that need
+to know *which* library failed, not only that something did. stdout then holds
+exactly one JSON object on a single line, followed by a newline, and nothing
+else. The usual text report is written to stderr instead, so a CI log still
+shows it; add `2>/dev/null` to drop it. The exit code is the same 0, 1 or 2 as
+in text mode, and `exit_code` in the object repeats it.
+
+```bash
+android-16kb-check --format json app-release.aab > alignment.json
+```
+
+The feature-module failure from the tests, pretty-printed here (the tool
+prints it on one line):
+
+```json
+{
+  "schema_version": 1,
+  "tool_version": "1.1.0",
+  "artifact": "app-release.aab",
+  "kind": "aab",
+  "tools": {"objdump": "/path/to/llvm-objdump", "archive": "bundletool"},
+  "archive": {"check": "bundle_config", "status": "ok",
+              "detail": "bundle config declares PAGE_ALIGNMENT_16K"},
+  "libraries": [
+    {"module": "base", "abi": "arm64-v8a", "name": "libexample.so",
+     "path": "base/lib/arm64-v8a/libexample.so", "status": "ok",
+     "min_align_log2": 14, "reason": null},
+    {"module": "base", "abi": "armeabi-v7a", "name": null,
+     "path": "base/lib/armeabi-v7a", "status": "skip",
+     "min_align_log2": null, "reason": "32-bit", "library_count": 1},
+    {"module": "feature_camera", "abi": "arm64-v8a", "name": "libcamera.so",
+     "path": "feature_camera/lib/arm64-v8a/libcamera.so", "status": "fail",
+     "min_align_log2": 12, "reason": "min align 2**12, below 2**14"},
+    {"module": "feature_camera", "abi": "armeabi-v7a", "name": null,
+     "path": "feature_camera/lib/armeabi-v7a", "status": "skip",
+     "min_align_log2": null, "reason": "32-bit", "library_count": 1}
+  ],
+  "verdict": "unaligned",
+  "exit_code": 1,
+  "reason": "at least one 64-bit library is not 16 KB aligned.",
+  "hints": ["A failure is usually a prebuilt .so shipped inside a dependency, built with an older NDK; upgrade or drop the dependency that owns it."]
+}
+```
+
+| field | meaning |
+|---|---|
+| `schema_version` | `1`. Raised only when a field is removed, renamed or changes meaning; new fields can appear without it changing, so ignore keys you do not know. |
+| `tool_version` | The `android-16kb-check` version that wrote it. |
+| `artifact` | The path as given on the command line, or `null` if the run stopped before one was known. |
+| `kind` | `"apk"`, `"aab"`, or `null` if the run stopped before that was known. |
+| `tools` | `objdump` and `archive` (bundletool for an AAB, zipalign for an APK), as the text report's header names them; `null` for one that was not resolved. |
+| `archive` | The archive-alignment check: `check` is `"bundle_config"` or `"zipalign"`, `status` is `"ok"` or `"fail"`, `detail` is the text report's line. `null` if the run stopped before the check gave an answer. |
+| `libraries` | One entry per line of the ELF section of the text report, in the same order. Empty if the run stopped before it. |
+| `verdict` | `"aligned"` (exit 0), `"unaligned"` (exit 1) or `"unverified"` (exit 2). |
+| `exit_code` | The process exit code. |
+| `reason` | Why the verdict is not `aligned`: the `FAIL —` or `CANNOT VERIFY —` line of the text report. `null` when aligned. |
+| `hints` | What to do next, as a list of strings; empty when aligned. For `unverified` these are the lines the text report prints under `CANNOT VERIFY`, one string per printed line. |
+
+Each entry in `libraries`:
+
+| field | meaning |
+|---|---|
+| `module` | The AAB module (`"base"`, `"feature_camera"`, ...). `null` for an APK. |
+| `abi` | `"arm64-v8a"`, `"armeabi-v7a"`, ... |
+| `name` | The library's file name. `null` for `skip` and `none`, which describe a whole ABI directory. |
+| `path` | Path inside the archive: the library, or the ABI directory for `skip` and `none`. |
+| `status` | `"ok"`, `"fail"`, `"skip"` (32-bit, exempt) or `"none"` (a 64-bit ABI directory holding no `.so`), matching `[ok]`, `[FAIL]`, `[SKIP]` and `[none]` in the text report. |
+| `min_align_log2` | The lowest LOAD segment alignment as a power of two (`14` is 16 KB). `null` when nothing was read: `skip`, `none`, or a `fail` with no readable LOAD segments. |
+| `reason` | Why it is not `ok`, or `null`. |
+| `library_count` | Only on `skip` and `none`: how many `.so` files the directory holds. |
+
+Every run that exits `2`, including an unknown option, a missing artifact and
+a missing toolchain, still prints the object, with `"verdict": "unverified"`.
+Two things stay text even with `--format json`: a missing or unknown
+`--format` value, since there is then no agreed format to answer in, and
+`--help` and `--version`, which print text and exit 0.
 
 ## Prerequisites
 
@@ -270,7 +353,8 @@ test/run.sh toolchain      # a substring filter on test names
 
 The suite needs no Android SDK and no real APK. External tools are replaced by
 stubs in `test/stubs`, and the artifacts by small archives in `test/fixtures`
-that have the right internal layout and nothing else. `shellcheck` runs over
+that have the right internal layout and nothing else. The text report is
+pinned byte for byte by the transcripts in `test/golden`. `shellcheck` runs over
 the script, the harness and the stubs in CI.
 
 ## Contributing

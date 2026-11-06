@@ -66,6 +66,14 @@ make("empty-64bit-abi.apk", [
     ("lib/arm64-v8a/wrap.sh", b"#!/system/bin/sh\nexec \"$@\"\n"),
     ("lib/armeabi-v7a/liblegacy.so", SO),
 ])
+# Library names that JSON has to escape: a double quote and a backslash. Both
+# are legal in a zip entry name and survive extraction on macOS and Linux, so
+# --format json must still print a valid object for them.
+make("escape-names.apk", [
+    ("AndroidManifest.xml", b"fixture\n"),
+    ("lib/arm64-v8a/lib\"quote\\back.so", SO),
+    ("lib/armeabi-v7a/liblegacy.so", SO),
+])
 
 # An archive holding a 64-bit .so that unzip will refuse to extract: its
 # compression method is patched to one Info-ZIP does not implement, which is

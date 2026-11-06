@@ -51,6 +51,14 @@ OPTIONS
                        the run fails rather than falling back.
   --bundletool <cmd>   bundletool executable, or a path ending in .jar which
                        is then run as 'java -jar <path>'. AAB only.
+  --format <fmt>       text (the default) or json. json writes exactly one
+                       JSON object to stdout and moves the text report to
+                       stderr; the exit codes do not change. The shape is
+                       described in the README under "Machine-readable
+                       output". Every result comes as JSON, option errors
+                       included, with two exceptions that stay text: a
+                       missing or unknown --format value, and --help and
+                       --version, which print text and exit 0.
   -h, --help           Show this help and exit 0.
   -V, --version        Print the version and exit 0.
 
@@ -81,15 +89,123 @@ EOF
 
 # Every "cannot verify" path funnels through here so the distinction between
 # "unaligned" and "unproven" can never be blurred by a stray exit 1.
+#
+# With --format json it also emits the JSON result, verdict "unverified",
+# with $1 as the reason and the remaining lines as hints.
 cannot_verify() {
   printf '%s: CANNOT VERIFY — %s\n' "${PROGRAM}" "$1" >&2
-  shift
   local line
-  for line in "$@"; do
+  for line in "${@:2}"; do
     printf '  %s\n' "${line}" >&2
   done
   printf '  Exit code 2 means unproven, not passed.\n' >&2
-  exit "${EXIT_CANNOT_VERIFY}"
+  finish unverified "${EXIT_CANNOT_VERIFY}" "$@"
+}
+
+# --------------------------------------------------------------- JSON output --
+# --format json is built from what the run recorded on the way, without
+# changing a byte of the text report. Plain bash 3.2, no jq or python: the
+# script has to run on the /bin/bash macOS ships.
+#
+# With json, file descriptor 3 is the real stdout and carries only the JSON
+# object; fd 1 is pointed at stderr once the options are parsed, so nothing
+# the text report prints can end up in front of or behind the object.
+
+OUTPUT_FORMAT="text"
+JSON_SCHEMA_VERSION=1
+KIND=""
+OBJDUMP=""
+ARCHIVE_CMD=""      # the archive tool as the header names it
+ARCHIVE_JSON="null" # the archive check's result, once it has one
+LIB_JSON=""         # the library records, comma-separated
+
+# JSON string literal for $1 into the variable named $2. The locals carry a
+# prefix so that the caller's variable name cannot be one of them.
+json_quote() {
+  local _jq_s="$1" _jq_out="" _jq_c _jq_code _jq_i
+  _jq_s=${_jq_s//\\/\\\\}
+  _jq_s=${_jq_s//\"/\\\"}
+  # Control characters are rare (an artifact path can hold a tab or a
+  # newline), so the character loop only runs when there is one.
+  if [[ "${_jq_s}" == *[[:cntrl:]]* ]]; then
+    for (( _jq_i = 0; _jq_i < ${#_jq_s}; _jq_i++ )); do
+      _jq_c="${_jq_s:_jq_i:1}"
+      case "${_jq_c}" in
+        [[:cntrl:]])
+          printf -v _jq_code '%d' "'${_jq_c}"
+          printf -v _jq_c '\\u%04x' "${_jq_code}"
+          ;;
+      esac
+      _jq_out+="${_jq_c}"
+    done
+    _jq_s="${_jq_out}"
+  fi
+  printf -v "$2" '"%s"' "${_jq_s}"
+}
+
+# As json_quote, but an empty $1 becomes null.
+json_or_null() {
+  if [[ -z "$1" ]]; then
+    printf -v "$2" 'null'
+  else
+    json_quote "$1" "$2"
+  fi
+}
+
+# One record per library, or per ABI directory for skip and none.
+#   $1 module ("" for an APK)  $2 abi  $3 library name ("" for a directory)
+#   $4 path in the archive     $5 status: ok, fail, skip or none
+#   $6 lowest LOAD alignment exponent ("" if none was read)
+#   $7 reason ("" for ok)      $8 number of .so files, for skip and none
+add_lib() {
+  [[ "${OUTPUT_FORMAT}" == "json" ]] || return 0
+  local m a n p r rec
+  json_or_null "$1" m
+  json_quote "$2" a
+  json_or_null "$3" n
+  json_quote "$4" p
+  json_or_null "$7" r
+  rec="{\"module\":${m},\"abi\":${a},\"name\":${n},\"path\":${p},\"status\":\"$5\""
+  rec+=",\"min_align_log2\":${6:-null},\"reason\":${r}"
+  if [[ -n "${8:-}" ]]; then
+    rec+=",\"library_count\":$8"
+  fi
+  LIB_JSON+="${LIB_JSON:+,}${rec}}"
+}
+
+# $1 check (bundle_config or zipalign), $2 status (ok or fail), $3 detail.
+set_archive() {
+  [[ "${OUTPUT_FORMAT}" == "json" ]] || return 0
+  local d
+  json_quote "$3" d
+  ARCHIVE_JSON="{\"check\":\"$1\",\"status\":\"$2\",\"detail\":${d}}"
+}
+
+# $1 verdict, $2 exit code, $3 reason ("" for none), $4... hints.
+emit_json() {
+  local verdict="$1" code="$2" reason artifact kind objdump archive hint hints=""
+  json_or_null "$3" reason
+  json_or_null "${ARTIFACT:-}" artifact
+  json_or_null "${KIND}" kind
+  json_or_null "${OBJDUMP}" objdump
+  json_or_null "${ARCHIVE_CMD}" archive
+  shift 3
+  for hint in "$@"; do
+    json_quote "${hint}" hint
+    hints+="${hints:+,}${hint}"
+  done
+  printf '{"schema_version":%s,"tool_version":"%s","artifact":%s,"kind":%s,"tools":{"objdump":%s,"archive":%s},"archive":%s,"libraries":[%s],"verdict":"%s","exit_code":%s,"reason":%s,"hints":[%s]}\n' \
+    "${JSON_SCHEMA_VERSION}" "${VERSION}" "${artifact}" "${kind}" "${objdump}" "${archive}" \
+    "${ARCHIVE_JSON}" "${LIB_JSON}" "${verdict}" "${code}" "${reason}" "${hints}" >&3
+}
+
+# Every exit with a verdict goes through here: $1 verdict, $2 exit code,
+# $3 reason, $4... hints. The text report has already been printed.
+finish() {
+  if [[ "${OUTPUT_FORMAT}" == "json" ]]; then
+    emit_json "$@"
+  fi
+  exit "$2"
 }
 
 # ------------------------------------------------------------------ options --
@@ -121,6 +237,50 @@ need_value() {
   fi
 }
 
+# --format is found before the options are parsed for real, so that an error
+# in any other option is already reported in the format asked for. This pass
+# only looks: it skips the values of --ndk and --bundletool the way the real
+# parse does, and it falls back to text if any --format value is missing or
+# unknown, since the real parse below will then stop on that value and there
+# is no agreed format to report it in.
+scan_format() {
+  local fmt="" bad=0
+  while (( $# )); do
+    case "$1" in
+      --) break ;;
+      --ndk|--bundletool) if (( $# > 1 )); then shift; fi ;;
+      --format|--format=*)
+        if [[ "$1" == "--format" ]]; then
+          fmt="${2:-}"
+          if (( $# > 1 )); then shift; fi
+        else
+          fmt="${1#--format=}"
+        fi
+        case "${fmt}" in
+          text|json) ;;
+          *) bad=1 ;;
+        esac
+        ;;
+    esac
+    shift
+  done
+  if (( bad == 0 )) && [[ "${fmt}" == "json" ]]; then
+    OUTPUT_FORMAT="json"
+  fi
+}
+scan_format "$@"
+if [[ "${OUTPUT_FORMAT}" == "json" ]]; then
+  exec 3>&1
+fi
+
+check_format() {
+  case "$1" in
+    text|json) ;;
+    "") cannot_verify "--format requires a value." "Run ${PROGRAM} --help for usage." ;;
+    *) cannot_verify "unknown --format value: $1" "Expected text or json." ;;
+  esac
+}
+
 while (( $# )); do
   if (( end_of_options )); then
     positional+=("$1")
@@ -137,11 +297,18 @@ while (( $# )); do
     --bundletool) need_value --bundletool $(( $# - 1 )) "${2:-}"; BUNDLETOOL_SPEC="$2"; shift ;;
     --bundletool=*) BUNDLETOOL_SPEC="${1#--bundletool=}"
                     [[ -n "${BUNDLETOOL_SPEC}" ]] || cannot_verify "--bundletool requires a value." ;;
+    --format) need_value --format $(( $# - 1 )) "${2:-}"; check_format "$2"; shift ;;
+    --format=*) check_format "${1#--format=}" ;;
     -*) cannot_verify "unknown option: $1" "Run ${PROGRAM} --help for usage." ;;
     *) positional+=("$1") ;;
   esac
   shift
 done
+
+# From here on the text report goes to stderr in json mode; fd 3 keeps stdout.
+if [[ "${OUTPUT_FORMAT}" == "json" ]]; then
+  exec 1>&2
+fi
 
 if (( ${#positional[@]} == 0 )); then
   cannot_verify "no artifact given." \
@@ -244,7 +411,6 @@ highest_ndk() {
   return 0
 }
 
-OBJDUMP=""
 if [[ -n "${NDK_DIR}" ]]; then
   # An explicitly named NDK is authoritative. Silently falling back to some
   # other objdump would report on a toolchain nobody asked for.
@@ -331,6 +497,12 @@ else
   fi
 fi
 
+if [[ "${KIND}" == "aab" ]]; then
+  ARCHIVE_CMD="${BUNDLETOOL_CMD[*]}"
+else
+  ARCHIVE_CMD="${ZIPALIGN}"
+fi
+
 # -------------------------------------------------------------------- report --
 
 printf '==> artifact : %s\n' "${ARTIFACT}"
@@ -357,6 +529,7 @@ if [[ "${KIND}" == "aab" ]]; then
   fi
   if printf '%s\n' "${config}" | grep -q 'PAGE_ALIGNMENT_16K'; then
     printf '    [ok]   bundle config declares PAGE_ALIGNMENT_16K\n'
+    set_archive bundle_config ok "bundle config declares PAGE_ALIGNMENT_16K"
   else
     printf '    [FAIL] bundle config does NOT declare PAGE_ALIGNMENT_16K\n' >&2
     printf '           uncompressNativeLibraries block was:\n' >&2
@@ -365,7 +538,10 @@ if [[ "${KIND}" == "aab" ]]; then
     printf '\n' >&2
     printf 'FAIL — the bundle is not storing native libraries 16 KB-aligned.\n' >&2
     printf '  This comes from the Android Gradle Plugin. Upgrade to AGP 8.5.1 or newer.\n' >&2
-    exit "${EXIT_UNALIGNED}"
+    set_archive bundle_config fail "bundle config does NOT declare PAGE_ALIGNMENT_16K"
+    finish unaligned "${EXIT_UNALIGNED}" \
+      "the bundle is not storing native libraries 16 KB-aligned." \
+      "This comes from the Android Gradle Plugin. Upgrade to AGP 8.5.1 or newer."
   fi
 else
   # zipalign's status is read on its own, for the same reason objdump's is
@@ -378,13 +554,17 @@ else
   "${ZIPALIGN}" -c -P 16 4 "${ARTIFACT}" >/dev/null 2>&1 || zipalign_status=$?
   if (( zipalign_status == 0 )); then
     printf '    [ok]   zipalign -c -P 16 4: verification successful\n'
+    set_archive zipalign ok "zipalign -c -P 16 4: verification successful"
   elif (( zipalign_status == 1 )); then
     printf '    [FAIL] zipalign reports the APK is not 16 KB aligned\n' >&2
     "${ZIPALIGN}" -v -c -P 16 4 "${ARTIFACT}" 2>&1 | grep -i 'bad\|fail' >&2 || true
     printf '\n' >&2
     printf 'FAIL — native libraries are not stored 16 KB-aligned in the zip.\n' >&2
     printf '  This comes from the Android Gradle Plugin. Upgrade to AGP 8.5.1 or newer.\n' >&2
-    exit "${EXIT_UNALIGNED}"
+    set_archive zipalign fail "zipalign reports the APK is not 16 KB aligned"
+    finish unaligned "${EXIT_UNALIGNED}" \
+      "native libraries are not stored 16 KB-aligned in the zip." \
+      "This comes from the Android Gradle Plugin. Upgrade to AGP 8.5.1 or newer."
   else
     cannot_verify "zipalign could not perform the check (exit ${zipalign_status})." \
       "It returns 1 when it has read the archive and found it misaligned;" \
@@ -415,9 +595,13 @@ trap 'rm -rf "${WORK}"' EXIT
 #                 an APK and for an AAB's base module, so the common report
 #                 reads as it always has; "<module>/lib/" for any other
 #                 module, so a [FAIL] there names the module it is in.
+#
+# LIB_MODULES holds the module name for an AAB and is empty for an APK; it is
+# only used for --format json.
 LIB_PATTERNS=()
 LIB_ROOTS=()
 LIB_LABELS=()
+LIB_MODULES=()
 if [[ "${KIND}" == "aab" ]]; then
   # The module list comes from the archive's own listing rather than from a
   # '*/lib/*' extraction pattern. unzip's '*' also matches '/', so that
@@ -441,6 +625,7 @@ if [[ "${KIND}" == "aab" ]]; then
     [[ -n "${module}" ]] || continue
     LIB_PATTERNS+=("${module}/lib/*")
     LIB_ROOTS+=("${module}/lib")
+    LIB_MODULES+=("${module}")
     if [[ "${module}" == "base" ]]; then
       LIB_LABELS+=("")
     else
@@ -454,6 +639,7 @@ else
   LIB_PATTERNS=('lib/*')
   LIB_ROOTS=('lib')
   LIB_LABELS=('')
+  LIB_MODULES=('')
   NO_LIBS_HINT="Expected lib/* inside ${ARTIFACT}."
 fi
 
@@ -505,9 +691,10 @@ abis64=0     # 64-bit ABI directories present in the archive, over all modules
 measured=0   # 64-bit .so files actually read
 
 # Measure every library under one root. $1 is the extracted root directory,
-# $2 the label from LIB_LABELS.
+# $2 the label from LIB_LABELS, $3 the root's path inside the archive (from
+# LIB_ROOTS) and $4 the module from LIB_MODULES.
 check_lib_root() {
-  local root="$1" label="$2"
+  local root="$1" label="$2" in_archive="$3" module="$4"
   local abi_dir abi n in_this_abi so so_name where raw aligns worst token exponent
 
   for abi_dir in "${root}"/*; do
@@ -519,6 +706,7 @@ check_lib_root() {
     if [[ "${abi}" != *64* ]]; then
       n="$(find "${abi_dir}" -name '*.so' | wc -l | tr -d ' ')"
       printf '    %-14s [SKIP] 32-bit, exempt (%s libs)\n' "${label}${abi}" "${n}"
+      add_lib "${module}" "${abi}" "" "${in_archive}/${abi}" skip "" "32-bit" "${n}"
       continue
     fi
     abis64=$(( abis64 + 1 ))
@@ -575,12 +763,18 @@ EOF
 
       if (( worst == 99 )); then
         printf '    %s [FAIL] no LOAD segments readable\n' "${where}" >&2
+        add_lib "${module}" "${abi}" "${so_name}" "${in_archive}/${abi}/${so_name}" \
+          fail "" "no LOAD segments readable"
         fail=1
       elif (( worst < 14 )); then
         printf '    %s [FAIL] min align 2**%s\n' "${where}" "${worst}" >&2
+        add_lib "${module}" "${abi}" "${so_name}" "${in_archive}/${abi}/${so_name}" \
+          fail "${worst}" "min align 2**${worst}, below 2**14"
         fail=1
       else
         printf '    %s [ok]   min align 2**%s\n' "${where}" "${worst}"
+        add_lib "${module}" "${abi}" "${so_name}" "${in_archive}/${abi}/${so_name}" \
+          ok "${worst}" ""
       fi
     done
 
@@ -590,6 +784,8 @@ EOF
     # does occur.
     if (( in_this_abi == 0 )); then
       printf '    %-14s [none] directory present but holds no .so\n' "${label}${abi}" >&2
+      add_lib "${module}" "${abi}" "" "${in_archive}/${abi}" none "" \
+        "directory present but holds no .so" 0
     fi
   done
 }
@@ -597,7 +793,7 @@ EOF
 printf '==> ELF LOAD segment alignment (must be >= 2**14)\n'
 i=0
 while (( i < ${#LIB_ROOTS[@]} )); do
-  check_lib_root "${WORK}/${LIB_ROOTS[i]}" "${LIB_LABELS[i]}"
+  check_lib_root "${WORK}/${LIB_ROOTS[i]}" "${LIB_LABELS[i]}" "${LIB_ROOTS[i]}" "${LIB_MODULES[i]}"
   i=$(( i + 1 ))
 done
 
@@ -625,7 +821,9 @@ if (( fail )); then
   printf '  built with an older NDK. Bumping your own ndkVersion cannot fix that\n' >&2
   printf '  binary — find the dependency that owns the .so named above and upgrade\n' >&2
   printf '  it to a release that ships 16 KB-aligned libraries, or drop it.\n' >&2
-  exit "${EXIT_UNALIGNED}"
+  finish unaligned "${EXIT_UNALIGNED}" \
+    "at least one 64-bit library is not 16 KB aligned." \
+    "A failure is usually a prebuilt .so shipped inside a dependency, built with an older NDK; upgrade or drop the dependency that owns it."
 fi
 printf 'PASS — archive alignment and every 64-bit library meet the 16 KB page requirement.\n'
-exit "${EXIT_ALIGNED}"
+finish aligned "${EXIT_ALIGNED}" ""

@@ -1,0 +1,17 @@
+--- exit 1
+--- stdout
+==> artifact : @FIXTURES@/sample.aab
+==> objdump  : @STUBS@/llvm-objdump
+==> archive  : bundletool (bundletool)
+
+==> Archive alignment
+--- stderr
+    [FAIL] bundle config does NOT declare PAGE_ALIGNMENT_16K
+           uncompressNativeLibraries block was:
+  uncompressNativeLibraries {
+    enabled: true
+  }
+}
+
+FAIL — the bundle is not storing native libraries 16 KB-aligned.
+  This comes from the Android Gradle Plugin. Upgrade to AGP 8.5.1 or newer.

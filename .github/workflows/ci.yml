@@ -50,3 +50,34 @@ jobs:
             echo "::error::expected exit 2 (could not verify), got $rc"
             exit 1
           fi
+
+      # test/run.sh checks the JSON shape with bash alone, since neither the
+      # script nor the suite may need Python. Here, where Python is to hand,
+      # a few --format json runs are parsed strictly: json.tool rejects
+      # anything that is not exactly one JSON document. The stubs stand in
+      # for the toolchain, and the runner's own Android SDK is hidden so the
+      # exit codes are the ones the stubs decide.
+      - name: --format json output parses
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/test/stubs:$PATH" HOME="$RUNNER_TEMP"
+          unset ANDROID_HOME ANDROID_SDK_ROOT ANDROID_NDK_HOME ANDROID_NDK_ROOT BUNDLETOOL
+          parse() {
+            local want="$1" rc=0
+            shift
+            env "$@" --format json > "$RUNNER_TEMP/out.json" 2> /dev/null || rc=$?
+            python3 -m json.tool "$RUNNER_TEMP/out.json" > /dev/null
+            echo "exit $rc: $*"
+            if [ "$rc" -ne "$want" ]; then
+              echo "::error::expected exit $want, got $rc: $*"
+              exit 1
+            fi
+          }
+          parse 0 ./android-16kb-check test/fixtures/sample.apk
+          parse 0 ./android-16kb-check test/fixtures/feature-module.aab
+          parse 0 ./android-16kb-check test/fixtures/escape-names.apk
+          parse 1 STUB_OBJDUMP_UNALIGNED_PATH=/feature_camera/ ./android-16kb-check test/fixtures/feature-module.aab
+          parse 1 STUB_BUNDLETOOL_ALIGNED=0 ./android-16kb-check test/fixtures/sample.aab
+          parse 2 ./android-16kb-check test/fixtures/only-32bit.apk
+          parse 2 ./android-16kb-check --ndk /nonexistent-ndk test/fixtures/sample.apk
+          parse 2 ./android-16kb-check --wat test/fixtures/sample.apk
