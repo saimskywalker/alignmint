@@ -161,12 +161,16 @@ android-16kb-check --ndk "$ANDROID_HOME/ndk/28.2.13676358" app-release.aab
 
 # bundletool as a downloaded jar instead of a PATH executable
 android-16kb-check --bundletool ~/tools/bundletool-all.jar app-release.aab
+
+# One JSON object on stdout for a script to read; the text report goes to stderr
+android-16kb-check --format json app-release.aab > alignment.json
 ```
 
 | option | effect |
 |---|---|
 | `--ndk <dir>` | Take `llvm-objdump` from this NDK. Overrides auto-detection; if the directory has no `llvm-objdump` the run fails rather than falling back to some other one. An empty value is an error, not "no `--ndk` given" — `--ndk "$UNSET_VAR"` must not silently become auto-detection. |
 | `--bundletool <cmd>` | Executable, or a path ending in `.jar` which is run as `java -jar`. AAB only. An empty value is an error, as for `--ndk`. |
+| `--format <text\|json>` | `text` (the default) is the report shown above. `json` prints one JSON object on stdout instead and moves the text report to stderr; see [Machine-readable output](#machine-readable-output). `--format=json` works too. The exit codes are the same in both. |
 | `-h`, `--help` | Usage, then exit 0. |
 | `-V`, `--version` | Version, then exit 0. |
 
@@ -200,6 +204,120 @@ Any non-zero exit fails the step, including `2`, because Actions runs `run:`
 blocks with `bash -e`. On a release job that is what you want: a gate that
 could not run should not let the build through. If you would rather keep `2`
 as a warning, use the `case` pattern from [Exit codes](#exit-codes).
+
+## Machine-readable output
+
+`--format json` is for CI jobs, pull request comments and dashboards that need
+to know *which* library failed, not only that something did. stdout then holds
+exactly one JSON object on a single line, followed by a newline, and nothing
+else. The usual text report is written to stderr instead, so a CI log still
+shows it; add `2>/dev/null` to drop it. The exit code is the same 0, 1 or 2 as
+in text mode, and `exit_code` in the object repeats it.
+
+```bash
+android-16kb-check --format json app-release.aab > alignment.json
+```
+
+The object starts with the envelope shared by alignmint, storehound and
+husk_sdk: `schemaVersion`, `tool`, `exitCode`, `summary` and `findings`, in
+that order. The fields for this check follow it. Keys are camelCase. Here is
+the feature-module failure from the tests, pretty-printed (the tool prints it
+on one line):
+
+```json
+{
+  "schemaVersion": 1,
+  "tool": {"name": "alignmint", "version": "1.1.0"},
+  "exitCode": 1,
+  "summary": {"error": 1, "warning": 0, "info": 0},
+  "findings": [
+    {"id": "library-unaligned", "severity": "error",
+     "message": "feature_camera/lib/arm64-v8a/libcamera.so: LOAD segments aligned to 2**12, below the 2**14 that 16 KB pages need.",
+     "path": "app-release.aab"}
+  ],
+  "verdict": "unaligned",
+  "reason": "at least one 64-bit library is not 16 KB aligned.",
+  "artifact": "app-release.aab",
+  "kind": "aab",
+  "tools": {"objdump": "/path/to/llvm-objdump", "archive": "bundletool"},
+  "archive": {"check": "bundleConfig", "status": "ok",
+              "detail": "bundle config declares PAGE_ALIGNMENT_16K"},
+  "libraries": [
+    {"module": "base", "abi": "arm64-v8a", "name": "libexample.so",
+     "path": "base/lib/arm64-v8a/libexample.so", "status": "ok",
+     "minAlignLog2": 14, "relro": {"status": "notChecked"}},
+    {"module": "base", "abi": "armeabi-v7a", "path": "base/lib/armeabi-v7a",
+     "status": "skip", "reason": "32-bit", "libraryCount": 1},
+    {"module": "feature_camera", "abi": "arm64-v8a", "name": "libcamera.so",
+     "path": "feature_camera/lib/arm64-v8a/libcamera.so", "status": "fail",
+     "minAlignLog2": 12, "reason": "min align 2**12, below 2**14",
+     "relro": {"status": "notChecked"}},
+    {"module": "feature_camera", "abi": "armeabi-v7a",
+     "path": "feature_camera/lib/armeabi-v7a", "status": "skip",
+     "reason": "32-bit", "libraryCount": 1}
+  ],
+  "hints": ["A failure is usually a prebuilt .so shipped inside a dependency, built with an older NDK; upgrade or drop the dependency that owns it."]
+}
+```
+
+| field | meaning |
+|---|---|
+| `schemaVersion` | `1`. Raised only when a field is removed, renamed or changes meaning; new fields can appear without it changing, so ignore keys you do not know. |
+| `tool` | `{"name": "alignmint", "version": ...}`, the version of the script that wrote it. |
+| `exitCode` | The process exit code: 0, 1 or 2. |
+| `summary` | `{"error", "warning", "info"}`: how many findings have each severity. |
+| `findings` | One entry per problem found, each with `id` (stable, see below), `severity` (`error`, `warning` or `info`), `message`, and `path`, the artifact, once one was named. Empty when aligned with nothing to report. |
+| `verdict` | `"aligned"` (exit 0), `"unaligned"` (exit 1) or `"unverified"` (exit 2). |
+| `reason` | Why the verdict is not `aligned`: the `FAIL —` or `CANNOT VERIFY —` line of the text report. `null` when aligned. |
+| `artifact` | The path as given on the command line, or `null` if the run stopped before one was known. |
+| `kind` | `"apk"`, `"aab"`, or `null` if the run stopped before that was known. |
+| `tools` | `objdump` and `archive` (bundletool for an AAB, zipalign for an APK), as the text report's header names them; `null` for one that was not resolved. |
+| `archive` | The archive-alignment check: `check` is `"bundleConfig"` or `"zipalign"`, `status` is `"ok"` or `"fail"`, `detail` is the text report's line. `null` if the run stopped before the check gave an answer. |
+| `libraries` | One entry per line of the ELF section of the text report, in the same order. Empty if the run stopped before it. |
+| `hints` | What to do next, as a list of strings; empty when aligned. Each string is one whole sentence or paragraph: for `unverified` these are the lines the text report prints under `CANNOT VERIFY`, with the lines it wraps for the terminal joined back together. |
+
+Each entry in `libraries` is either a 64-bit library (`ok` or `fail`) or a
+whole ABI directory (`skip` or `none`). Keys that do not apply are left out.
+
+| field | meaning |
+|---|---|
+| `module` | The AAB module (`"base"`, `"feature_camera"`, ...). `null` for an APK. |
+| `abi` | `"arm64-v8a"`, `"armeabi-v7a"`, ... |
+| `name` | Libraries only: the file name. |
+| `path` | Path inside the archive: the library, or the ABI directory. |
+| `status` | `"ok"`, `"fail"`, `"skip"` (32-bit, exempt) or `"none"` (a 64-bit ABI directory holding no `.so`), matching `[ok]`, `[FAIL]`, `[SKIP]` and `[none]` in the text report. |
+| `minAlignLog2` | Libraries only: the lowest LOAD segment alignment as a power of two (`14` is 16 KB), or `null` when no LOAD segment could be read. |
+| `reason` | Why it is not `ok`. Left out for `ok`. |
+| `relro` | Libraries only: `{"status": "notChecked"}`. This script does not check GNU_RELRO yet; the field is there so that a later check can fill it in without changing the shape. |
+| `libraryCount` | `skip` and `none` only: how many `.so` files the directory holds. |
+
+### Finding ids
+
+The ids are stable: a script can match on them, and they will not be renamed
+without a new `schemaVersion`. A 32-bit ABI directory is not a finding; it is
+reported in `libraries` with status `skip`.
+
+| id | severity | verdict | when |
+|---|---|---|---|
+| `library-unaligned` | error | unaligned | A 64-bit library has a LOAD segment aligned below `2**14`. One finding per library; the message names it. |
+| `library-no-load` | error | unaligned | objdump read a 64-bit library but found no readable LOAD segment in it. |
+| `archive-unaligned` | error | unaligned | The bundle config does not declare `PAGE_ALIGNMENT_16K`, or zipalign reports the APK is not 16 KB aligned. |
+| `abi-without-libraries` | warning | any | A 64-bit ABI directory holds no `.so` (the `[none]` line). If no other 64-bit library was read either, `nothing-measured` follows. |
+| `option-invalid` | error | unverified | An unknown option, an option missing its value, or more than one artifact. |
+| `artifact-missing` | error | unverified | No artifact was given, or the path does not exist. |
+| `artifact-invalid` | error | unverified | The path is not a regular file, or does not end in `.apk` or `.aab`. |
+| `tool-missing` | error | unverified | A required tool was not found: llvm-objdump (including under the NDK named by `--ndk` or `ANDROID_NDK_HOME`), bundletool, java for a bundletool `.jar`, zipalign or unzip. |
+| `tool-failed` | error | unverified | A tool was found but could not do its check: zipalign exited with something other than 0 or 1, or objdump could not read a library. |
+| `archive-unreadable` | error | unverified | bundletool could not read the bundle config, or unzip could not list or fully extract the native libraries. |
+| `no-native-libraries` | error | unverified | The artifact has no native libraries at all. |
+| `32-bit-only` | error | unverified | The artifact has only 32-bit ABIs, so there is nothing to check. |
+| `nothing-measured` | error | unverified | There is a 64-bit ABI directory, but no 64-bit library was read. |
+
+Every run that exits `2`, including an unknown option, a missing artifact and
+a missing toolchain, still prints the object, with `"verdict": "unverified"`.
+Two things stay text even with `--format json`: a missing or unknown
+`--format` value, since there is then no agreed format to answer in, and
+`--help` and `--version`, which print text and exit 0.
 
 ## Prerequisites
 
@@ -270,7 +388,10 @@ test/run.sh toolchain      # a substring filter on test names
 
 The suite needs no Android SDK and no real APK. External tools are replaced by
 stubs in `test/stubs`, and the artifacts by small archives in `test/fixtures`
-that have the right internal layout and nothing else. `shellcheck` runs over
+that have the right internal layout and nothing else. The text report is
+pinned byte for byte by the transcripts in `test/golden`. Where `python3` is
+installed, `test/check-json.py` also checks each `--format json` result
+strictly; neither the script nor the suite needs Python. `shellcheck` runs over
 the script, the harness and the stubs in CI.
 
 ## Contributing

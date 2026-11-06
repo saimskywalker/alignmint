@@ -1,0 +1,19 @@
+--- exit 2
+--- stdout
+==> artifact : @FIXTURES@/empty-64bit-abi.apk
+==> objdump  : @STUBS@/llvm-objdump
+==> archive  : @STUBS@/zipalign (zipalign)
+
+==> Archive alignment
+    [ok]   zipalign -c -P 16 4: verification successful
+
+==> ELF LOAD segment alignment (must be >= 2**14)
+    armeabi-v7a    [SKIP] 32-bit, exempt (1 libs)
+
+--- stderr
+    arm64-v8a      [none] directory present but holds no .so
+android-16kb-check: CANNOT VERIFY — no 64-bit library was read, so nothing was measured.
+  The artifact has a 64-bit ABI directory, but it contains no .so files.
+  Either this is not the artifact you meant to check, or its 64-bit
+  native code is missing. Neither is evidence of alignment.
+  Exit code 2 means unproven, not passed.

@@ -1,0 +1,16 @@
+--- exit 0
+--- stdout
+==> artifact : @FIXTURES@/sample.apk
+==> objdump  : @STUBS@/llvm-objdump
+==> archive  : @STUBS@/zipalign (zipalign)
+
+==> Archive alignment
+    [ok]   zipalign -c -P 16 4: verification successful
+
+==> ELF LOAD segment alignment (must be >= 2**14)
+    arm64-v8a      libexample.so                          [ok]   min align 2**14
+    arm64-v8a      libsecond.so                           [ok]   min align 2**14
+    armeabi-v7a    [SKIP] 32-bit, exempt (1 libs)
+
+PASS — archive alignment and every 64-bit library meet the 16 KB page requirement.
+--- stderr

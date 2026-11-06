@@ -1,0 +1,24 @@
+--- exit 1
+--- stdout
+==> artifact : @FIXTURES@/feature-module.aab
+==> objdump  : @STUBS@/llvm-objdump
+==> archive  : bundletool (bundletool)
+
+==> Archive alignment
+    [ok]   bundle config declares PAGE_ALIGNMENT_16K
+
+==> ELF LOAD segment alignment (must be >= 2**14)
+    arm64-v8a      libexample.so                          [ok]   min align 2**14
+    armeabi-v7a    [SKIP] 32-bit, exempt (1 libs)
+    feature_camera/lib/armeabi-v7a [SKIP] 32-bit, exempt (1 libs)
+
+--- stderr
+    feature_camera/lib/arm64-v8a/libcamera.so             [FAIL] min align 2**12
+FAIL — at least one 64-bit library is not 16 KB aligned.
+  Play will reject this upload.
+
+  Libraries you compile yourself are aligned by NDK r28 or newer.
+  A failure here is usually a PREBUILT .so shipped inside a dependency,
+  built with an older NDK. Bumping your own ndkVersion cannot fix that
+  binary — find the dependency that owns the .so named above and upgrade
+  it to a release that ships 16 KB-aligned libraries, or drop it.

@@ -63,20 +63,42 @@ PASSED=0
 FAILED=0
 CURRENT=""
 OUT=""
+ERR=""
 RC=0
+TOOL_ENV=()
 
-# Run the checker with a controlled environment. Everything after the first
-# argument is passed to the tool; env overrides come in via TEST_ENV.
-run_tool() {
-  local -a env_args=("HOME=${FAKE_HOME}" "PATH=${TEST_PATH:-${FULL_PATH}}")
+# The controlled environment every run gets: the fake HOME, TEST_PATH (or the
+# stubbed PATH), and any KEY=VALUE overrides from TEST_ENV.
+tool_env() {
+  TOOL_ENV=("HOME=${FAKE_HOME}" "PATH=${TEST_PATH:-${FULL_PATH}}")
   if [[ -n "${TEST_ENV:-}" ]]; then
     # shellcheck disable=SC2206  # deliberate word splitting: TEST_ENV is a
     # space-separated list of KEY=VALUE pairs written by the tests themselves.
     local -a extra=(${TEST_ENV})
-    env_args+=("${extra[@]}")
+    TOOL_ENV+=("${extra[@]}")
   fi
-  OUT="$(env -i "${env_args[@]}" "${TOOL}" "$@" 2>&1)"
+}
+
+# Run the checker with a controlled environment. Everything after the first
+# argument is passed to the tool; env overrides come in via TEST_ENV.
+run_tool() {
+  tool_env
+  OUT="$(env -i "${TOOL_ENV[@]}" "${TOOL}" "$@" 2>&1)"
   RC=$?
+  return 0
+}
+
+# Like run_tool, but keeps the two streams apart: stdout in OUT (and, byte
+# for byte, in ${STDOUT_FILE}), stderr in ERR. With --format json, stdout on
+# its own is the interface, so it cannot be read mixed with stderr.
+STDOUT_FILE="${TMPROOT}/stdout"
+STDERR_FILE="${TMPROOT}/stderr"
+run_tool_split() {
+  tool_env
+  env -i "${TOOL_ENV[@]}" "${TOOL}" "$@" >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+  RC=$?
+  OUT="$(cat "${STDOUT_FILE}")"
+  ERR="$(cat "${STDERR_FILE}")"
   return 0
 }
 
@@ -84,6 +106,7 @@ start() {
   CURRENT="$1"
   TEST_PATH=""
   TEST_ENV=""
+  ERR=""
 }
 
 fail() {
@@ -92,6 +115,10 @@ fail() {
   printf '      %s\n' "$1"
   printf '      --- output (exit %s) ---\n' "${RC}"
   printf '%s\n' "${OUT}" | sed 's/^/      /'
+  if [[ -n "${ERR}" ]]; then
+    printf '      --- stderr ---\n'
+    printf '%s\n' "${ERR}" | sed 's/^/      /'
+  fi
   printf '      ---\n'
 }
 
@@ -130,6 +157,103 @@ assert_line() {
   if ! printf '%s\n' "${OUT}" | grep -F -- "$1" | grep -qF -- "$2"; then
     fail "expected a line containing both: $1 / $2"
     return 1
+  fi
+  return 0
+}
+
+# ------------------------------------------------------------ golden output
+#
+# The text report is read by people and, until --format json, by scripts that
+# scraped it, so it must not move by a byte when the JSON output is touched.
+# Each file in test/golden/ is a transcript of one run of the text report:
+# exit code, then stdout, then stderr, exactly as the tool wrote them. The
+# repository's own paths are replaced by @FIXTURES@ and @STUBS@ so the files
+# do not depend on where the checkout lives.
+#
+# These are not regenerated casually. If a change to the text report is
+# intended, regenerate with GOLDEN_UPDATE=1 test/run.sh golden, review the
+# diff, and say so in CHANGELOG.md.
+GOLDEN="${HERE}/golden"
+
+# Read a whole file into the variable named $2, trailing newlines included.
+slurp() {
+  local _content
+  _content="$(cat "$1"; printf x)"
+  printf -v "$2" '%s' "${_content%x}"
+}
+
+# The last run_tool_split, as a transcript with the paths replaced.
+transcript() {
+  local _out _err _t
+  slurp "${STDOUT_FILE}" _out
+  slurp "${STDERR_FILE}" _err
+  _t="$(printf -- '--- exit %s\n--- stdout\n%s--- stderr\n%s' "${RC}" "${_out}" "${_err}"; printf x)"
+  _t="${_t%x}"
+  _t="${_t//"${FIXTURES}"/@FIXTURES@}"
+  _t="${_t//"${STUBS}"/@STUBS@}"
+  printf -v "$1" '%s' "${_t}"
+}
+
+# $1 = golden file name, the rest = arguments for the tool. The run must
+# match the golden file with no --format at all, with --format text and with
+# --format=text.
+golden_case() {
+  local name="$1" file="${GOLDEN}/$1.txt" expected actual form
+  shift
+  if [[ -n "${GOLDEN_UPDATE:-}" ]]; then
+    run_tool_split "$@"
+    transcript actual
+    mkdir -p "${GOLDEN}"
+    printf '%s' "${actual}" > "${file}"
+    return 0
+  fi
+  if [[ ! -f "${file}" ]]; then
+    fail "missing golden file ${file}"
+    return 1
+  fi
+  slurp "${file}" expected
+  for form in none --format --format=text; do
+    case "${form}" in
+      none)     run_tool_split "$@" ;;
+      --format) run_tool_split --format text "$@" ;;
+      *)        run_tool_split "${form}" "$@" ;;
+    esac
+    transcript actual
+    if [[ "${actual}" != "${expected}" ]]; then
+      printf '%s' "${actual}" > "${TMPROOT}/golden-actual"
+      OUT="$(diff -u "${file}" "${TMPROOT}/golden-actual")"
+      ERR=""
+      fail "text report differs from ${name}.txt (format option: ${form})"
+      return 1
+    fi
+  done
+  return 0
+}
+
+# ------------------------------------------------------------- JSON helpers
+
+# stdout holds exactly one JSON object on one line, and nothing else. The
+# harness needs nothing beyond bash, so the structural check is done here;
+# where python3 happens to be installed, test/check-json.py also parses the
+# object strictly and checks the envelope (summary counts match findings).
+# CI parses a set of runs with python3 -m json.tool as well.
+assert_json_object() {
+  local s
+  slurp "${STDOUT_FILE}" s
+  if [[ "${s}" != "{"*"}"$'\n' ]]; then
+    fail "stdout is not a single JSON object followed by a newline"
+    return 1
+  fi
+  s="${s%$'\n'}"
+  if [[ "${s}" == *$'\n'* ]]; then
+    fail "stdout holds more than one line"
+    return 1
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    if ! python3 -I "${HERE}/check-json.py" < "${STDOUT_FILE}" > "${TMPROOT}/check-json.out" 2>&1; then
+      fail "stdout is not a valid result object: $(cat "${TMPROOT}/check-json.out")"
+      return 1
+    fi
   fi
   return 0
 }
@@ -566,6 +690,313 @@ t_aab_feature_module_objdump_failure_is_two() {
   assert_not_out "PASS" || return 1
 }
 
+# ---------------------------------------------------------------- --format json
+#
+# With --format json, stdout is the interface: exactly one JSON object that
+# opens with the family envelope (schemaVersion, tool, exitCode, summary,
+# findings) and carries the same verdict as the exit code. These run with
+# stdout and stderr apart.
+
+t_json_apk_aligned() {
+  run_tool_split --format json "${FIXTURES}/sample.apk"
+  assert_rc 0 || return 1
+  assert_json_object || return 1
+  assert_out '{"schemaVersion":1,"tool":{"name":"alignmint","version":"' || return 1
+  assert_out '"exitCode":0,"summary":{"error":0,"warning":0,"info":0},"findings":[],"verdict":"aligned","reason":null' || return 1
+  assert_out '"artifact":"'"${FIXTURES}"'/sample.apk","kind":"apk"' || return 1
+  assert_out '"tools":{"objdump":"'"${STUBS}"'/llvm-objdump","archive":"'"${STUBS}"'/zipalign"}' || return 1
+  assert_out '"archive":{"check":"zipalign","status":"ok","detail":"zipalign -c -P 16 4: verification successful"}' || return 1
+  assert_out '{"module":null,"abi":"arm64-v8a","name":"libexample.so","path":"lib/arm64-v8a/libexample.so","status":"ok","minAlignLog2":14,"relro":{"status":"notChecked"}}' || return 1
+  assert_out '{"module":null,"abi":"armeabi-v7a","path":"lib/armeabi-v7a","status":"skip","reason":"32-bit","libraryCount":1}' || return 1
+  assert_out '"hints":[]}' || return 1
+  # The text report is still there for the log, on stderr.
+  if ! printf '%s' "${ERR}" | grep -qF "PASS"; then
+    fail "expected the text report on stderr"
+    return 1
+  fi
+}
+
+t_json_aab_feature_module_unaligned() {
+  TEST_ENV="STUB_OBJDUMP_UNALIGNED_PATH=/feature_camera/"
+  run_tool_split --format json "${FIXTURES}/feature-module.aab"
+  assert_rc 1 || return 1
+  assert_json_object || return 1
+  assert_out '"exitCode":1,"summary":{"error":1,"warning":0,"info":0},"findings":[{"id":"library-unaligned","severity":"error","message":"feature_camera/lib/arm64-v8a/libcamera.so: LOAD segments aligned to 2**12, below the 2**14 that 16 KB pages need.","path":"'"${FIXTURES}"'/feature-module.aab"}]' || return 1
+  assert_out '"verdict":"unaligned","reason":"at least one 64-bit library is not 16 KB aligned."' || return 1
+  assert_out '"kind":"aab"' || return 1
+  assert_out '"archive":{"check":"bundleConfig","status":"ok","detail":"bundle config declares PAGE_ALIGNMENT_16K"}' || return 1
+  assert_out '{"module":"base","abi":"arm64-v8a","name":"libexample.so","path":"base/lib/arm64-v8a/libexample.so","status":"ok","minAlignLog2":14,"relro":{"status":"notChecked"}}' || return 1
+  assert_out '{"module":"feature_camera","abi":"arm64-v8a","name":"libcamera.so","path":"feature_camera/lib/arm64-v8a/libcamera.so","status":"fail","minAlignLog2":12,"reason":"min align 2**12, below 2**14","relro":{"status":"notChecked"}}' || return 1
+  assert_out '{"module":"feature_camera","abi":"armeabi-v7a","path":"feature_camera/lib/armeabi-v7a","status":"skip"' || return 1
+  assert_not_out "libasset_decoy.so" || return 1
+}
+
+t_json_unreadable_elf_is_fail() {
+  TEST_ENV="STUB_OBJDUMP_NO_LOAD=1"
+  run_tool_split --format json "${FIXTURES}/sample.apk"
+  assert_rc 1 || return 1
+  assert_json_object || return 1
+  # Two 64-bit libraries, two findings, and the summary counts them.
+  assert_out '"summary":{"error":2,"warning":0,"info":0}' || return 1
+  assert_out '{"id":"library-no-load","severity":"error","message":"lib/arm64-v8a/libexample.so: objdump read the library but found no readable LOAD segments."' || return 1
+  assert_out '"name":"libexample.so","path":"lib/arm64-v8a/libexample.so","status":"fail","minAlignLog2":null,"reason":"no LOAD segments readable","relro":{"status":"notChecked"}}' || return 1
+  assert_out '"verdict":"unaligned"' || return 1
+}
+
+t_json_aab_archive_unaligned() {
+  TEST_ENV="STUB_BUNDLETOOL_ALIGNED=0"
+  run_tool_split --format json "${FIXTURES}/sample.aab"
+  assert_rc 1 || return 1
+  assert_json_object || return 1
+  assert_out '"summary":{"error":1,"warning":0,"info":0},"findings":[{"id":"archive-unaligned","severity":"error"' || return 1
+  assert_out '"archive":{"check":"bundleConfig","status":"fail","detail":"bundle config does NOT declare PAGE_ALIGNMENT_16K"},"libraries":[]' || return 1
+  assert_out '"verdict":"unaligned"' || return 1
+}
+
+t_json_apk_zip_unaligned() {
+  TEST_ENV="STUB_ZIPALIGN_RC=1"
+  run_tool_split --format json "${FIXTURES}/sample.apk"
+  assert_rc 1 || return 1
+  assert_json_object || return 1
+  assert_out '"findings":[{"id":"archive-unaligned","severity":"error"' || return 1
+  assert_out '"archive":{"check":"zipalign","status":"fail"' || return 1
+  assert_out '"verdict":"unaligned"' || return 1
+}
+
+t_json_only_32bit_is_unverified() {
+  run_tool_split --format json "${FIXTURES}/only-32bit.apk"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"exitCode":2,"summary":{"error":1,"warning":0,"info":0},"findings":[{"id":"32-bit-only","severity":"error","message":"the artifact contains no 64-bit ABI, so there is nothing to check.","path":"'"${FIXTURES}"'/only-32bit.apk"}]' || return 1
+  assert_out '"verdict":"unverified","reason":"the artifact contains no 64-bit ABI, so there is nothing to check."' || return 1
+  assert_out '"status":"skip","reason":"32-bit","libraryCount":1}' || return 1
+  assert_out '"hints":["16 KB pages only apply to arm64-v8a and x86_64.",' || return 1
+}
+
+t_json_empty_64bit_abi_is_unverified() {
+  run_tool_split --format json "${FIXTURES}/empty-64bit-abi.apk"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"summary":{"error":1,"warning":1,"info":0},"findings":[{"id":"abi-without-libraries","severity":"warning","message":"lib/arm64-v8a/ is a 64-bit ABI directory that holds no .so, so nothing in it was measured."' || return 1
+  assert_out '{"id":"nothing-measured","severity":"error"' || return 1
+  assert_out '{"module":null,"abi":"arm64-v8a","path":"lib/arm64-v8a","status":"none","reason":"directory present but holds no .so","libraryCount":0}' || return 1
+  assert_out '"verdict":"unverified"' || return 1
+}
+
+t_json_missing_toolchain_is_unverified() {
+  TEST_PATH="${BARE_PATH}"
+  run_tool_split --format json "${FIXTURES}/sample.apk"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"exitCode":2,"summary":{"error":1,"warning":0,"info":0},"findings":[{"id":"tool-missing","severity":"error","message":"no llvm-objdump found."' || return 1
+  assert_out '"verdict":"unverified","reason":"no llvm-objdump found."' || return 1
+  assert_out '"tools":{"objdump":null,"archive":null},"archive":null,"libraries":[]' || return 1
+  assert_not_out '"verdict":"aligned"' || return 1
+  # The human message still goes to stderr.
+  if ! printf '%s' "${ERR}" | grep -qF "CANNOT VERIFY"; then
+    fail "expected the CANNOT VERIFY message on stderr"
+    return 1
+  fi
+}
+
+t_json_hints_are_whole_sentences() {
+  # The text report wraps its explanation over several lines; in JSON each
+  # hint is one whole sentence or paragraph, never a piece of one.
+  TEST_PATH="${TMPROOT}/objdump-only:${BARE_BIN}"
+  mkdir -p "${TMPROOT}/objdump-only"
+  ln -sf "${STUBS}/llvm-objdump" "${TMPROOT}/objdump-only/llvm-objdump"
+  run_tool_split --format json "${FIXTURES}/sample.aab"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '{"id":"tool-missing","severity":"error","message":"bundletool not found on PATH."' || return 1
+  assert_out '"hints":["It reads the bundle config, which is where an AAB records its archive alignment. Install it: brew install bundletool","Or download bundletool-all.jar from https://github.com/google/bundletool/releases and pass --bundletool /path/to/bundletool-all.jar","An APK needs zipalign instead of bundletool."]}' || return 1
+}
+
+t_json_hints_join_wrapped_lines() {
+  run_tool_split --format json "${FIXTURES}/empty-64bit-abi.apk"
+  assert_rc 2 || return 1
+  assert_out '"hints":["The artifact has a 64-bit ABI directory, but it contains no .so files.","Either this is not the artifact you meant to check, or its 64-bit native code is missing. Neither is evidence of alignment."]}' || return 1
+  TEST_ENV="STUB_ZIPALIGN_RC=2"
+  run_tool_split --format json "${FIXTURES}/sample.apk"
+  assert_rc 2 || return 1
+  assert_out '{"id":"tool-failed","severity":"error","message":"zipalign could not perform the check (exit 2)."' || return 1
+  assert_out '"The usual cause is build-tools older than 35, whose zipalign has no -P flag: '"${STUBS}"'/zipalign"' || return 1
+  assert_out '"It returns 1 when it has read the archive and found it misaligned; any other status means it never got that far, so nothing was measured."' || return 1
+}
+
+t_json_objdump_failure_is_unverified() {
+  TEST_ENV="STUB_OBJDUMP_FAIL=1"
+  run_tool_split --format json "${FIXTURES}/sample.apk"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"findings":[{"id":"tool-failed","severity":"error","message":"llvm-objdump could not read arm64-v8a/libexample.so."' || return 1
+  assert_out '"verdict":"unverified"' || return 1
+}
+
+t_json_archive_unreadable_is_unverified() {
+  run_tool_split --format json "${FIXTURES}/unreadable-entry.apk"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"findings":[{"id":"archive-unreadable","severity":"error"' || return 1
+  assert_out '"verdict":"unverified"' || return 1
+}
+
+t_json_no_native_libraries_is_unverified() {
+  run_tool_split --format json "${FIXTURES}/no-native-libs.apk"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"findings":[{"id":"no-native-libraries","severity":"error"' || return 1
+}
+
+t_json_artifact_errors_are_unverified() {
+  run_tool_split --format json "${TMPROOT}/does-not-exist.apk"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"findings":[{"id":"artifact-missing","severity":"error","message":"artifact not found: '"${TMPROOT}"'/does-not-exist.apk","path":"'"${TMPROOT}"'/does-not-exist.apk"}]' || return 1
+  : > "${TMPROOT}/thing.zip"
+  run_tool_split --format json "${TMPROOT}/thing.zip"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"findings":[{"id":"artifact-invalid","severity":"error"' || return 1
+}
+
+t_json_option_error_is_unverified() {
+  # The unknown option comes before --format, and is still reported as JSON.
+  # No artifact has been named yet, so the finding has no path.
+  run_tool_split --wat --format json "${FIXTURES}/sample.apk"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"exitCode":2,"summary":{"error":1,"warning":0,"info":0},"findings":[{"id":"option-invalid","severity":"error","message":"unknown option: --wat"}]' || return 1
+  assert_out '"verdict":"unverified","reason":"unknown option: --wat","artifact":null,"kind":null' || return 1
+}
+
+t_json_after_ndk_value_is_unverified() {
+  # --ndk takes the next argument as its value; the scan for --format has to
+  # skip it the same way and still find the --format after it.
+  run_tool_split --ndk "${BOGUS_NDK}" "${FIXTURES}/sample.apk" --format json
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"findings":[{"id":"tool-missing","severity":"error","message":"no llvm-objdump under the NDK named by --ndk: '"${BOGUS_NDK}"'"' || return 1
+  assert_out '"verdict":"unverified"' || return 1
+}
+
+t_json_equals_form_no_artifact() {
+  run_tool_split --format=json
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"findings":[{"id":"artifact-missing","severity":"error","message":"no artifact given."}]' || return 1
+  assert_out '"verdict":"unverified","reason":"no artifact given."' || return 1
+}
+
+t_json_escapes_quote_and_backslash() {
+  # The library is named lib"quote\back.so inside the archive.
+  run_tool_split --format json "${FIXTURES}/escape-names.apk"
+  assert_rc 0 || return 1
+  assert_json_object || return 1
+  assert_out '"name":"lib\"quote\\back.so","path":"lib/arm64-v8a/lib\"quote\\back.so"' || return 1
+}
+
+t_json_escapes_control_characters() {
+  # unzip drops control characters from entry names, but the artifact path is
+  # whatever the caller passed, and a tab in it must not break the object.
+  local dir="${TMPROOT}/tab"$'\t'"dir"
+  mkdir -p "${dir}"
+  cp "${FIXTURES}/sample.apk" "${dir}/sample.apk"
+  run_tool_split --format json "${dir}/sample.apk"
+  assert_rc 0 || return 1
+  assert_json_object || return 1
+  assert_out '/tab\u0009dir/sample.apk"' || return 1
+}
+
+t_format_text_is_the_default() {
+  run_tool_split --format json --format text "${FIXTURES}/sample.apk"
+  assert_rc 0 || return 1
+  assert_out "PASS" || return 1
+  assert_not_out '"verdict"' || return 1
+}
+
+t_format_last_one_wins() {
+  run_tool_split --format text --format=json "${FIXTURES}/sample.apk"
+  assert_rc 0 || return 1
+  assert_json_object || return 1
+}
+
+t_format_unknown_value_is_text() {
+  # No agreed format to answer in, so this one stays text, as --help says.
+  run_tool_split --format yaml "${FIXTURES}/sample.apk"
+  assert_rc 2 || return 1
+  if [[ -n "${OUT}" ]]; then
+    fail "expected nothing on stdout"
+    return 1
+  fi
+  OUT="${ERR}"
+  assert_out "unknown --format value: yaml" || return 1
+}
+
+t_format_unknown_value_wins_over_json() {
+  run_tool_split --format json --format=xml "${FIXTURES}/sample.apk"
+  assert_rc 2 || return 1
+  assert_not_out "{" || return 1
+  OUT="${ERR}"
+  assert_out "unknown --format value: xml" || return 1
+}
+
+t_format_requires_a_value() {
+  run_tool_split --format
+  assert_rc 2 || return 1
+  assert_not_out "{" || return 1
+  OUT="${ERR}"
+  assert_out "--format requires a value" || return 1
+}
+
+t_format_as_ndk_value_is_not_a_format() {
+  # Here --format is the value of --ndk, as the real parse reads it, so json
+  # was never asked for: "json" is a second artifact and the error is text.
+  run_tool_split --ndk --format json "${FIXTURES}/sample.apk"
+  assert_rc 2 || return 1
+  assert_not_out "{" || return 1
+  OUT="${ERR}"
+  assert_out "expected exactly one artifact" || return 1
+}
+
+t_json_help_stays_text() {
+  run_tool_split --format json --help
+  assert_rc 0 || return 1
+  assert_out "USAGE" || return 1
+  assert_out "--format <fmt>" || return 1
+  assert_out "stay text" || return 1
+}
+
+# ------------------------------------------------- text report, byte for byte
+
+t_golden_apk_pass()          { golden_case apk-pass "${FIXTURES}/sample.apk"; }
+t_golden_apk_elf_fail() {
+  TEST_ENV="STUB_OBJDUMP_ALIGN=2**12"
+  golden_case apk-elf-fail "${FIXTURES}/sample.apk"
+}
+t_golden_apk_no_load() {
+  TEST_ENV="STUB_OBJDUMP_NO_LOAD=1"
+  golden_case apk-no-load "${FIXTURES}/sample.apk"
+}
+t_golden_apk_zip_fail() {
+  TEST_ENV="STUB_ZIPALIGN_RC=1"
+  golden_case apk-zip-fail "${FIXTURES}/sample.apk"
+}
+t_golden_aab_feature_fail() {
+  TEST_ENV="STUB_OBJDUMP_UNALIGNED_PATH=/feature_camera/"
+  golden_case aab-feature-fail "${FIXTURES}/feature-module.aab"
+}
+t_golden_aab_archive_fail() {
+  TEST_ENV="STUB_BUNDLETOOL_ALIGNED=0"
+  golden_case aab-archive-fail "${FIXTURES}/sample.aab"
+}
+t_golden_only_32bit()        { golden_case only-32bit "${FIXTURES}/only-32bit.apk"; }
+t_golden_empty_64bit_abi()   { golden_case empty-64bit-abi "${FIXTURES}/empty-64bit-abi.apk"; }
+t_golden_missing_toolchain() {
+  TEST_PATH="${BARE_PATH}"
+  golden_case missing-toolchain "${FIXTURES}/sample.apk"
+}
+
 # -------------------------------------------------------------------- runner
 
 printf 'android-16kb-check test suite\n\n'
@@ -617,6 +1048,41 @@ check "an unaligned lib in a feature module exits 1" t_aab_unaligned_lib_in_feat
 check "libs only in a feature module are measured"  t_aab_libs_only_in_feature_module_are_measured
 check "unaligned libs only in a feature module exit 1" t_aab_libs_only_in_feature_module_unaligned_fails_with_one
 check "objdump failing in a feature module exits 2" t_aab_feature_module_objdump_failure_is_two
+check "json: an aligned APK"                       t_json_apk_aligned
+check "json: an unaligned feature module"           t_json_aab_feature_module_unaligned
+check "json: an unreadable ELF is fail"             t_json_unreadable_elf_is_fail
+check "json: an AAB without PAGE_ALIGNMENT_16K"     t_json_aab_archive_unaligned
+check "json: an unaligned zip"                      t_json_apk_zip_unaligned
+check "json: a 32-bit-only APK is unverified"       t_json_only_32bit_is_unverified
+check "json: a 64-bit dir with no .so"              t_json_empty_64bit_abi_is_unverified
+check "json: a missing toolchain is unverified"     t_json_missing_toolchain_is_unverified
+check "json: hints are whole sentences"           t_json_hints_are_whole_sentences
+check "json: wrapped hint lines are joined"         t_json_hints_join_wrapped_lines
+check "json: an objdump failure is unverified"      t_json_objdump_failure_is_unverified
+check "json: an unreadable archive is unverified"  t_json_archive_unreadable_is_unverified
+check "json: no native libraries is unverified"    t_json_no_native_libraries_is_unverified
+check "json: artifact errors are unverified"        t_json_artifact_errors_are_unverified
+check "json: an option error is unverified"         t_json_option_error_is_unverified
+check "json: --format after an --ndk value"         t_json_after_ndk_value_is_unverified
+check "json: --format=json with no artifact"        t_json_equals_form_no_artifact
+check "json: quote and backslash are escaped"       t_json_escapes_quote_and_backslash
+check "json: control characters are escaped"        t_json_escapes_control_characters
+check "--format text after json gives text"         t_format_text_is_the_default
+check "the last --format wins"                      t_format_last_one_wins
+check "an unknown --format value is text, exit 2"   t_format_unknown_value_is_text
+check "an unknown --format beats an earlier json"   t_format_unknown_value_wins_over_json
+check "--format requires a value"                   t_format_requires_a_value
+check "--format as the --ndk value is not a format" t_format_as_ndk_value_is_not_a_format
+check "--help stays text under --format json"       t_json_help_stays_text
+check "golden: aligned APK"                         t_golden_apk_pass
+check "golden: under-aligned library"               t_golden_apk_elf_fail
+check "golden: no readable LOAD segments"           t_golden_apk_no_load
+check "golden: unaligned zip"                       t_golden_apk_zip_fail
+check "golden: unaligned lib in a feature module"   t_golden_aab_feature_fail
+check "golden: AAB without PAGE_ALIGNMENT_16K"      t_golden_aab_archive_fail
+check "golden: 32-bit-only artifact"                t_golden_only_32bit
+check "golden: 64-bit dir with no .so"              t_golden_empty_64bit_abi
+check "golden: missing toolchain"                   t_golden_missing_toolchain
 
 printf '\n%s passed, %s failed\n' "${PASSED}" "${FAILED}"
 if (( FAILED > 0 )); then

@@ -113,7 +113,12 @@ directory prefix in field 1 reads as `0` under both BSD and GNU. `version_gt`
 does it in bash for that reason; prefer it to adding a `sort` call.
 
 **Anything printed to stdout on the passing path.** People pipe this into build
-scripts. Keep failures and diagnostics on stderr.
+scripts. Keep failures and diagnostics on stderr. The text report is pinned
+byte for byte by `test/golden/`, and with `--format json` stdout carries the
+JSON object and nothing else. A new exit path goes through `cannot_verify` or
+`finish`, so it reports in both formats. `cannot_verify` takes a finding id
+first; reuse one from the README's "Finding ids" table where it fits, and add
+a row there if a new one is needed.
 
 ## Scope
 

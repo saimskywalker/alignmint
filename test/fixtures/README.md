@@ -13,6 +13,7 @@ matters here is only where the entries sit inside the archive.
 | `no-native-libs.apk` | no `lib/` directory at all |
 | `only-32bit.apk` | `lib/armeabi-v7a/` only, no 64-bit ABI |
 | `empty-64bit-abi.apk` | `lib/arm64-v8a/` holding only a `wrap.sh`, so there is a 64-bit ABI directory but no 64-bit library to measure |
+| `escape-names.apk` | a 64-bit lib named `lib"quote\back.so`, so `--format json` has to escape a quote and a backslash |
 | `unreadable-entry.apk` | two 64-bit `.so`, one of them stored with a compression method `unzip` cannot decode, so extraction is necessarily partial |
 
 Committed as binaries so the suite needs no zip tool. Regenerate with

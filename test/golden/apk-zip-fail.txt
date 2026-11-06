@@ -1,0 +1,13 @@
+--- exit 1
+--- stdout
+==> artifact : @FIXTURES@/sample.apk
+==> objdump  : @STUBS@/llvm-objdump
+==> archive  : @STUBS@/zipalign (zipalign)
+
+==> Archive alignment
+--- stderr
+    [FAIL] zipalign reports the APK is not 16 KB aligned
+BAD - lib/arm64-v8a/libexample.so (BAD - 4096)
+
+FAIL — native libraries are not stored 16 KB-aligned in the zip.
+  This comes from the Android Gradle Plugin. Upgrade to AGP 8.5.1 or newer.
