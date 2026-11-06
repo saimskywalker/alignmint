@@ -182,18 +182,39 @@ set_archive() {
 }
 
 # $1 verdict, $2 exit code, $3 reason ("" for none), $4... hints.
+#
+# The hints are the lines the text report prints under the reason, and those
+# are wrapped to fit a terminal. In JSON each hint is one whole sentence or
+# paragraph, so the wrapping is undone here: a line that does not start with
+# an upper-case letter continues the one before it (a lower-case word, an
+# indented command, "-P flag: ..."), and is joined to it with one space.
+# Write new cannot_verify lines to that rule.
 emit_json() {
-  local verdict="$1" code="$2" reason artifact kind objdump archive hint hints=""
+  local verdict="$1" code="$2" reason artifact kind objdump archive line
+  local hint="" quoted hints=""
   json_or_null "$3" reason
   json_or_null "${ARTIFACT:-}" artifact
   json_or_null "${KIND}" kind
   json_or_null "${OBJDUMP}" objdump
   json_or_null "${ARCHIVE_CMD}" archive
   shift 3
-  for hint in "$@"; do
-    json_quote "${hint}" hint
-    hints+="${hints:+,}${hint}"
+  for line in "$@"; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -n "${line}" ]] || continue
+    if [[ -n "${hint}" && "${line}" != [[:upper:]]* ]]; then
+      hint+=" ${line}"
+      continue
+    fi
+    if [[ -n "${hint}" ]]; then
+      json_quote "${hint}" quoted
+      hints+="${hints:+,}${quoted}"
+    fi
+    hint="${line}"
   done
+  if [[ -n "${hint}" ]]; then
+    json_quote "${hint}" quoted
+    hints+="${hints:+,}${quoted}"
+  fi
   printf '{"schema_version":%s,"tool_version":"%s","artifact":%s,"kind":%s,"tools":{"objdump":%s,"archive":%s},"archive":%s,"libraries":[%s],"verdict":"%s","exit_code":%s,"reason":%s,"hints":[%s]}\n' \
     "${JSON_SCHEMA_VERSION}" "${VERSION}" "${artifact}" "${kind}" "${objdump}" "${archive}" \
     "${ARCHIVE_JSON}" "${LIB_JSON}" "${verdict}" "${code}" "${reason}" "${hints}" >&3

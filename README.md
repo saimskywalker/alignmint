@@ -263,7 +263,7 @@ prints it on one line):
 | `verdict` | `"aligned"` (exit 0), `"unaligned"` (exit 1) or `"unverified"` (exit 2). |
 | `exit_code` | The process exit code. |
 | `reason` | Why the verdict is not `aligned`: the `FAIL —` or `CANNOT VERIFY —` line of the text report. `null` when aligned. |
-| `hints` | What to do next, as a list of strings; empty when aligned. For `unverified` these are the lines the text report prints under `CANNOT VERIFY`, one string per printed line. |
+| `hints` | What to do next, as a list of strings; empty when aligned. Each string is one whole sentence or paragraph: for `unverified` these are the lines the text report prints under `CANNOT VERIFY`, with the lines it wraps for the terminal joined back together. |
 
 Each entry in `libraries`:
 

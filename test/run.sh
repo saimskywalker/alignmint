@@ -785,6 +785,29 @@ t_json_missing_toolchain_is_unverified() {
   fi
 }
 
+t_json_hints_are_whole_sentences() {
+  # The text report wraps its explanation over several lines; in JSON each
+  # hint is one whole sentence or paragraph, never a piece of one.
+  TEST_PATH="${TMPROOT}/objdump-only:${BARE_BIN}"
+  mkdir -p "${TMPROOT}/objdump-only"
+  ln -sf "${STUBS}/llvm-objdump" "${TMPROOT}/objdump-only/llvm-objdump"
+  run_tool_split --format json "${FIXTURES}/sample.aab"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"reason":"bundletool not found on PATH.","hints":["It reads the bundle config, which is where an AAB records its archive alignment. Install it: brew install bundletool","Or download bundletool-all.jar from https://github.com/google/bundletool/releases and pass --bundletool /path/to/bundletool-all.jar","An APK needs zipalign instead of bundletool."]}' || return 1
+}
+
+t_json_hints_join_wrapped_lines() {
+  run_tool_split --format json "${FIXTURES}/empty-64bit-abi.apk"
+  assert_rc 2 || return 1
+  assert_out '"hints":["The artifact has a 64-bit ABI directory, but it contains no .so files.","Either this is not the artifact you meant to check, or its 64-bit native code is missing. Neither is evidence of alignment."]}' || return 1
+  TEST_ENV="STUB_ZIPALIGN_RC=2"
+  run_tool_split --format json "${FIXTURES}/sample.apk"
+  assert_rc 2 || return 1
+  assert_out '"The usual cause is build-tools older than 35, whose zipalign has no -P flag: '"${STUBS}"'/zipalign"' || return 1
+  assert_out '"It returns 1 when it has read the archive and found it misaligned; any other status means it never got that far, so nothing was measured."' || return 1
+}
+
 t_json_objdump_failure_is_unverified() {
   TEST_ENV="STUB_OBJDUMP_FAIL=1"
   run_tool_split --format json "${FIXTURES}/sample.apk"
@@ -986,6 +1009,8 @@ check "json: an unaligned zip"                      t_json_apk_zip_unaligned
 check "json: a 32-bit-only APK is unverified"       t_json_only_32bit_is_unverified
 check "json: a 64-bit dir with no .so"              t_json_empty_64bit_abi_is_unverified
 check "json: a missing toolchain is unverified"     t_json_missing_toolchain_is_unverified
+check "json: hints are whole sentences"           t_json_hints_are_whole_sentences
+check "json: wrapped hint lines are joined"         t_json_hints_join_wrapped_lines
 check "json: an objdump failure is unverified"      t_json_objdump_failure_is_unverified
 check "json: an option error is unverified"         t_json_option_error_is_unverified
 check "json: --format after an --ndk value"         t_json_after_ndk_value_is_unverified
