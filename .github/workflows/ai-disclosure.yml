@@ -1,8 +1,9 @@
 name: AI disclosure
 
 # PRs say in the description whether AI tools were used; using them is welcome.
-# See "AI-assisted contributions" in CONTRIBUTING.md. This job reads only the
-# event payload: no checkout, no token permissions.
+# See "AI-assisted contributions" in CONTRIBUTING.md. This check is a reminder:
+# it only adds a warning and never fails the PR; maintainers ask before merging.
+# It reads only the event payload: no checkout, no token permissions.
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize, ready_for_review]
@@ -23,15 +24,16 @@ jobs:
         run: |
           set -euo pipefail
           body="${PR_BODY//$'\r'/}"
-          fail() {
-            echo "::error title=AI use disclosure::$1"
+          remind() {
+            echo "::warning title=AI use disclosure::$1"
             echo "Please fill in the \"### AI use\" section of the pull request template: tick exactly one"
-            echo "of None, Some or Most (naming the tool and model for Some or Most), and tick \"I wrote this description myself\"."
+            echo "of None, Some or Most (naming the tool and model for Some or Most), and tick \"I have read and tested every line\"."
+            echo "This is a reminder and does not fail the PR; a maintainer will ask about it before merging."
             echo "See \"AI-assisted contributions\" in CONTRIBUTING.md. Editing the description re-runs this check."
-            exit 1
+            exit 0
           }
           if ! grep -Eiq '^###[[:space:]]+AI use[[:space:]]*$' <<<"$body"; then
-            fail 'The PR description has no "### AI use" section.'
+            remind 'The PR description has no "### AI use" section.'
           fi
           section="$(awk '
             tolower($0) ~ /^###[[:space:]]+ai use[[:space:]]*$/ { in_s = 1; next }
@@ -40,7 +42,7 @@ jobs:
           ' <<<"$body")"
           ticked="$(grep -Eic '^[[:space:]]*[-*][[:space:]]+\[x\][[:space:]]+(none|some|most)([^[:alnum:]]|$)' <<<"$section" || true)"
           if [ "$ticked" -ne 1 ]; then
-            fail "Tick exactly one of None, Some or Most under \"### AI use\" (found $ticked ticked)."
+            remind "Tick exactly one of None, Some or Most under \"### AI use\" (found $ticked ticked)."
           fi
           choice="$(grep -Ei '^[[:space:]]*[-*][[:space:]]+\[x\][[:space:]]+(none|some|most)([^[:alnum:]]|$)' <<<"$section")"
           if grep -Eiq '\[x\][[:space:]]+(some|most)' <<<"$choice"; then
@@ -53,10 +55,11 @@ jobs:
             }' <<<"$choice")"
             named="$(tr -d '[:space:]()' <<<"$named")"
             if [[ "$choice" == *"..."* || "$choice" == *"…"* || ${#named} -lt 2 ]]; then
-              fail 'Name the AI tool and model you used, e.g. "Claude Code, Opus 5.5".'
+              remind 'Name the AI tool and model you used, e.g. "Claude Code, Opus 5.5".'
             fi
           fi
-          if ! grep -Eiq '^[[:space:]]*[-*][[:space:]]+\[x\][[:space:]]+I wrote this description myself' <<<"$section"; then
-            fail 'Tick "I wrote this description myself and I have read and tested every line."'
+          # The old template's "I wrote this description myself and ..." still counts.
+          if ! grep -Eiq '^[[:space:]]*[-*][[:space:]]+\[x\][[:space:]]+(I have read and tested every line|I wrote this description myself)' <<<"$section"; then
+            remind 'Tick "I have read and tested every line."'
           fi
           echo "AI use disclosure present."
