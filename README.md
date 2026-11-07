@@ -4,6 +4,8 @@
 [![Release](https://img.shields.io/github/v/release/saimskywalker/alignmint)](https://github.com/saimskywalker/alignmint/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+**Status:** maintained. Bug fixes continue; larger new features are on hold for now.
+
 Your Play Console upload was rejected for 16 KB page alignment, or you want to
 find out before you upload. This is a shell script that answers that question
 against the actual `.apk` or `.aab` file, on your machine, in a few seconds.
