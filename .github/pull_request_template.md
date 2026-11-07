@@ -16,12 +16,12 @@
 
 ### AI use
 
-<!-- Using AI is welcome. Required: tick one, naming the tool and model if you used AI; a check fails without it. See CONTRIBUTING.md. -->
+<!-- Using AI is welcome. Please tick one, naming the tool and model if you used AI; a reminder appears if it is missing. See CONTRIBUTING.md. -->
 
 - [ ] None
 - [ ] Some (tool or agent, and model: ...)
 - [ ] Most (tool or agent, and model: ...)
-- [ ] I wrote this description myself and I have read and tested every line.
+- [ ] I have read and tested every line.
 
 ## If this touches the exit codes
 
