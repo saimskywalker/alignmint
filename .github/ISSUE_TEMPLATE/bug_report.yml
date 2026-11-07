@@ -83,6 +83,6 @@ body:
     id: own-words
     attributes:
       label: Your own words
+      description: Please write the issue in your own words; short and plain is fine. It shows us what you understood. Please don't paste generated text.
       options:
         - label: I wrote this issue in my own words.
-          required: true
