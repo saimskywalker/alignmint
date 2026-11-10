@@ -18,17 +18,15 @@ test/run.sh
 
 CI runs the same two commands on `ubuntu-latest`, plus a check that the script
 is still executable and that a run with no toolchain exits 2. shellcheck must
-be clean — not "clean apart from the informational ones". If a finding is
-genuinely wrong, disable it by number with a comment saying why, the way
-`test/run.sh` does for `SC2317,SC2329`, and say so in the pull request: a new
-disable fails the `PR rules` check until a maintainer waives it.
+be clean — not "clean apart from the informational ones". No new
+`# shellcheck disable` lines: fix the finding. Only a maintainer can waive
+this, with the `suppression-ok` label.
 
 Mind the version gap while you are there: `ubuntu-latest` still installs
 shellcheck 0.9, and a current local shellcheck is 0.11. They do not always use
 the same code for the same finding — indirectly-invoked functions are SC2317
-on 0.9 and SC2329 from 0.10 onward — so a disable that names only one of a
-pair is clean on the laptop and red on CI. Disabling both is harmless; an
-unknown code is ignored rather than reported.
+on 0.9 and SC2329 from 0.10 onward — so read the CI log, not only the local
+run.
 
 ## Pull requests
 
@@ -42,7 +40,7 @@ merged. The `PR rules` check enforces these:
   `test/`. A bug fix needs a test that fails without the fix.
 - **Small.** At most 400 changed lines, one issue per pull request.
 - **No suppressions.** No new `# shellcheck disable` lines in the shell files,
-  no `.shellcheckrc`. Fix the finding.
+  no `.shellcheckrc`. Fix the finding; only a maintainer can waive this.
 - **At most 2 open pull requests** per person.
 
 If a rule really does not fit your change, say why in the description. A

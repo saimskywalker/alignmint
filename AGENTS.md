@@ -81,8 +81,8 @@ Stop and ask the person you work for to provide them:
 ## Never
 
 - Never silence shellcheck (checked): no new `# shellcheck disable` lines, no
-  `.shellcheckrc`. Fix the finding instead. If a finding is really wrong, say
-  why in the pull request and let a maintainer decide.
+  `.shellcheckrc`. Fix the finding instead. Only a maintainer can waive this,
+  with the `suppression-ok` label.
 - Never delete, skip, loosen or rewrite an existing test, golden file or
   fixture to make CI pass. If a test looks wrong, say so in the issue.
 - Never change what an exit code means, rename a finding id or `--format json`
