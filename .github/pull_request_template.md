@@ -10,6 +10,8 @@
 
 - [ ] `shellcheck android-16kb-check test/run.sh test/stubs/*` is clean
 - [ ] `test/run.sh` passes
+- [ ] Closes an issue labelled `accepted`; at most 400 changed lines; no new `# shellcheck disable` (checked)
+- [ ] Changes to `android-16kb-check` come with a test under `test/` (checked)
 - [ ] If this fixes a bug: there is a test that fails without the fix
 - [ ] If this changes what an exit code means: `CHANGELOG.md` says so, and the
       README table matches

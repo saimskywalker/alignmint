@@ -18,16 +18,40 @@ test/run.sh
 
 CI runs the same two commands on `ubuntu-latest`, plus a check that the script
 is still executable and that a run with no toolchain exits 2. shellcheck must
-be clean — not "clean apart from the informational ones". If a finding is
-genuinely wrong, disable it by number with a comment saying why, the way
-`test/run.sh` does for `SC2317,SC2329`.
+be clean — not "clean apart from the informational ones". No new
+`# shellcheck disable` lines: fix the finding. Only a maintainer can waive
+this, with the `suppression-ok` label.
 
 Mind the version gap while you are there: `ubuntu-latest` still installs
 shellcheck 0.9, and a current local shellcheck is 0.11. They do not always use
 the same code for the same finding — indirectly-invoked functions are SC2317
-on 0.9 and SC2329 from 0.10 onward — so a disable that names only one of a
-pair is clean on the laptop and red on CI. Disabling both is harmless; an
-unknown code is ignored rather than reported.
+on 0.9 and SC2329 from 0.10 onward — so read the CI log, not only the local
+run.
+
+## Pull requests
+
+Small, focused commits with clear messages, in English. Run the commands
+above before pushing; every CI check must pass before a pull request can be
+merged. The `PR rules` check enforces these:
+
+- **Issue first.** Open an issue and wait until a maintainer labels it
+  `accepted`, then write `Closes #N` in the pull request.
+- **Tests.** Every change to `android-16kb-check` needs a test change under
+  `test/`. A bug fix needs a test that fails without the fix.
+- **Small.** At most 400 changed lines, one issue per pull request.
+- **No suppressions.** No new `# shellcheck disable` lines in the shell files,
+  no `.shellcheckrc`. Fix the finding; only a maintainer can waive this.
+- **At most 2 open pull requests** per person.
+
+If a rule really does not fit your change, say why in the description. A
+maintainer can waive it with a label (`no-tests-needed`, `large-change` or
+`suppression-ok`).
+
+## Legal notice
+
+By submitting a contribution you confirm that you wrote it, that you have the
+right to submit it, and that it may be distributed under the project license
+(see [LICENSE](LICENSE)).
 
 ## The exit codes are the interface
 
@@ -61,7 +85,10 @@ Using AI tools is fine; please just be open about it.
 
 - Say in the PR description which AI tools you used, if any: none, some or most, plus the tool or agent and the model (for example "Claude Code, Opus 5.5" or "Copilot, GPT-5").
 - Please write the PR description in your own words; short and plain is fine. It shows us what you understood about the change. Please don't paste generated text.
-- Read, run and test every line you submit, and be ready to explain it in review.
+- Read, run and test every line you submit, and be ready to explain it in review. If you don't understand what a line does, don't submit it.
+- Keep the change focused. Agents like to add unrelated "improvements", long comments and dead code; remove them before you open the pull request.
+- Pull requests that are raw, unreviewed agent output will be closed.
+- If you use an agent, point it at [AGENTS.md](AGENTS.md).
 - If the disclosure is missing, a check adds a reminder to the PR. It does not fail the PR, but a maintainer will ask about it before merging.
 
 ## What a good bug fix looks like

@@ -1,0 +1,91 @@
+name: PR rules
+
+# The rules in CONTRIBUTING.md and AGENTS.md, enforced. Each rule fails the PR;
+# only a maintainer can waive one, with the label named in its step (only
+# maintainers can add labels). Reads the GitHub API only: no checkout.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, labeled, unlabeled]
+
+permissions:
+  pull-requests: read
+  issues: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  PR: ${{ github.event.pull_request.number }}
+  AUTHOR: ${{ github.event.pull_request.user.login }}
+  CODE: '^android-16kb-check$'
+  TESTS: '^test/'
+  MAX_LINES: 400
+
+jobs:
+  rules:
+    name: PR rules
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read the changed files
+        run: gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" > "$RUNNER_TEMP/files.json"
+
+      - name: Code changes come with tests (waive with no-tests-needed)
+        if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'no-tests-needed') }}
+        run: |
+          files="$(jq -r '.[].filename' "$RUNNER_TEMP/files.json")"
+          if grep -Eq "$CODE" <<<"$files" && ! grep -Eq "$TESTS" <<<"$files"; then
+            echo "::error title=Tests required::This PR changes android-16kb-check but no test. Add a test under test/."
+            exit 1
+          fi
+
+      - name: At most MAX_LINES changed lines (waive with large-change)
+        if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'large-change') }}
+        run: |
+          lines="$(jq '[.[] | select(.filename | test("\\.lock$") | not) | .additions + .deletions] | add // 0' "$RUNNER_TEMP/files.json")"
+          if [ "$lines" -gt "$MAX_LINES" ]; then
+            echo "::error title=PR too large::$lines changed lines (limit $MAX_LINES). Split it into smaller PRs, one issue each."
+            exit 1
+          fi
+
+      - name: No lint suppressions (waive with suppression-ok)
+        if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'suppression-ok') }}
+        run: |
+          # Added lines in the shell files that silence shellcheck.
+          hits="$(jq -r '.[] | select(.patch and (.filename | test("^(android-16kb-check|test/stubs/.*|.*\\.sh)$")))
+            | .filename as $f | .patch | split("\n")[]
+            | select(startswith("+") and test("#\\s*shellcheck\\s+(.*\\s)?disable="))
+            | "\($f): \(.)"' "$RUNNER_TEMP/files.json")"
+          if jq -e 'any(.[]; .filename | test("(^|/)\\.shellcheckrc$"))' "$RUNNER_TEMP/files.json" >/dev/null; then
+            hits="${hits}"$'\n'".shellcheckrc is changed"
+          fi
+          if [ -n "${hits//[[:space:]]/}" ]; then
+            echo "::error title=Lint suppression::Fix the finding instead of silencing it:"
+            echo "$hits"
+            exit 1
+          fi
+
+      - name: Linked to an accepted issue (maintainers exempt)
+        if: ${{ !cancelled() && !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        env:
+          QUERY: >-
+            query($owner: String!, $name: String!, $pr: Int!) { repository(owner: $owner, name: $name) {
+            nameWithOwner pullRequest(number: $pr) { closingIssuesReferences(first: 10) { nodes {
+            repository { nameWithOwner } labels(first: 20) { nodes { name } } } } } } }
+          FILTER: >-
+            .data.repository as $r | [$r.pullRequest.closingIssuesReferences.nodes[]
+            | select(.repository.nameWithOwner == $r.nameWithOwner)
+            | select(any(.labels.nodes[]; .name == "accepted"))] | length
+        run: |
+          accepted="$(gh api graphql -F owner="${GITHUB_REPOSITORY%/*}" -F name="${GITHUB_REPOSITORY#*/}" \
+            -F pr="$PR" -f query="$QUERY" --jq "$FILTER")"
+          if [ "$accepted" -eq 0 ]; then
+            echo "::error title=Issue first::Open an issue first and wait until a maintainer labels it 'accepted', then write 'Closes #N' in the PR description. Editing the description re-runs this check."
+            exit 1
+          fi
+
+      - name: At most 2 open PRs per person (maintainers exempt)
+        if: ${{ !cancelled() && !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        run: |
+          open="$(gh pr list -R "$GITHUB_REPOSITORY" --author "$AUTHOR" --state open --json number --jq length)"
+          if [ "$open" -gt 2 ]; then
+            echo "::error title=Too many open PRs::You have $open open PRs here (limit 2). Finish or close one first."
+            exit 1
+          fi
