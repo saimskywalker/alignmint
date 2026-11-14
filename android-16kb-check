@@ -3,9 +3,10 @@
 # android-16kb-check — verify an Android APK or AAB satisfies Google Play's
 # 16 KB memory-page requirement.
 #
-# Play has required 16 KB page support since 2025-11-01 for apps targeting
-# API 35+ on 64-bit devices, and it enforces this AT UPLOAD: a failure rejects
-# the artifact before review ever runs. Two independent things have to hold.
+# Google Play requires apps that target API 35+ to support 16 KB pages on
+# 64-bit devices; from 2027-02-01 an update that does not cannot be released.
+# https://developer.android.com/guide/practices/page-sizes#google-play-compatibility-requirement
+# Two independent things have to hold.
 #
 #   1. Archive alignment. Native libraries must be stored uncompressed and
 #      16 KB-aligned inside the zip. AGP >= 8.5.1 does this; it shows up as
@@ -26,7 +27,7 @@
 set -euo pipefail
 
 PROGRAM="android-16kb-check"
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 # The three-way exit contract. 2 exists so a machine without the toolchain
 # reports "unproven" instead of "fine", which is the failure mode that lets an
@@ -72,7 +73,8 @@ ENVIRONMENT
 EXIT CODES
   0  Aligned. Archive alignment is correct and every 64-bit library has all
      LOAD segments at 2**14 or better.
-  1  Not aligned. Play would reject this upload.
+  1  Not aligned. From 1 February 2027 Google Play will not release an
+     update like this for an app that targets API 35 or higher.
   2  Could not verify — a required tool or the artifact is missing, or the
      artifact has nothing to check. THIS IS NOT A PASS. Treat it as an
      unproven gate, never as a green light.
@@ -622,7 +624,7 @@ else
   # anything above that means it never got as far as checking. The case that
   # actually happens is build-tools older than 35, whose zipalign has no -P
   # flag at all and exits 2 on the usage error — reading that as "not
-  # aligned" announces a rejection about an archive nobody measured.
+  # aligned" announces a failure about an archive nobody measured.
   zipalign_status=0
   "${ZIPALIGN}" -c -P 16 4 "${ARTIFACT}" >/dev/null 2>&1 || zipalign_status=$?
   if (( zipalign_status == 0 )); then
@@ -658,8 +660,8 @@ trap 'rm -rf "${WORK}"' EXIT
 
 # Where the libraries live. An APK puts them at lib/<abi>/. An AAB keeps them
 # per module, at <module>/lib/<abi>/ — base/, plus one directory for every
-# dynamic feature or other module. Play enforces 16 KB alignment on every .so
-# in the bundle, and a feature module is a common home for exactly the kind of
+# dynamic feature or other module. The Play requirement covers every .so in
+# the bundle, and a feature module is a common home for exactly the kind of
 # prebuilt library this check exists to catch, so every module is read, not
 # only base.
 #
@@ -813,8 +815,8 @@ check_lib_root() {
       #   broken, which is a [FAIL].
       #   objdump could not run at all -> nothing was measured, which is a 2.
       #
-      # Collapsing the second into the first reports "Play will reject this
-      # upload" about a library the tool never managed to look at.
+      # Collapsing the second into the first reports a FAIL about a library
+      # the tool never managed to look at.
       if ! raw="$("${OBJDUMP}" -p "${so}" 2>/dev/null)"; then
         cannot_verify tool-failed "${OBJDUMP##*/} could not read ${label}${abi}/${so_name}." \
           "Command: ${OBJDUMP} -p <${so_name}>" \
@@ -895,13 +897,22 @@ if (( measured == 0 )); then
 fi
 if (( fail )); then
   printf 'FAIL — at least one 64-bit library is not 16 KB aligned.\n' >&2
-  printf '  Play will reject this upload.\n' >&2
-  printf '\n' >&2
-  printf '  Libraries you compile yourself are aligned by NDK r28 or newer.\n' >&2
-  printf '  A failure here is usually a PREBUILT .so shipped inside a dependency,\n' >&2
-  printf '  built with an older NDK. Bumping your own ndkVersion cannot fix that\n' >&2
-  printf '  binary — find the dependency that owns the .so named above and upgrade\n' >&2
-  printf '  it to a release that ships 16 KB-aligned libraries, or drop it.\n' >&2
+  cat >&2 <<'EOF'
+  Google Play: from 1 February 2027, updates of apps that target Android 15
+  (API 35) or higher cannot be released unless they support 16 KB memory pages.
+  https://developer.android.com/guide/practices/page-sizes#google-play-compatibility-requirement
+  This check does not read targetSdk. Since 31 August 2026 Play requires phone
+  app updates to target API 36, so this applies to almost every update.
+  https://developer.android.com/google/play/requirements/target-sdk
+  On 16 KB devices an unaligned library may still run in backcompat mode;
+  that does not lift the Play requirement.
+
+  Libraries you compile yourself are aligned by NDK r28 or newer.
+  A failure here is usually a PREBUILT .so shipped inside a dependency.
+  Bumping your own ndkVersion cannot fix that binary — find the dependency
+  that owns the .so named above and upgrade it to a release that ships
+  16 KB-aligned libraries, or drop it.
+EOF
   finish unaligned "${EXIT_UNALIGNED}" \
     "at least one 64-bit library is not 16 KB aligned." \
     "A failure is usually a prebuilt .so shipped inside a dependency, built with an older NDK; upgrade or drop the dependency that owns it."

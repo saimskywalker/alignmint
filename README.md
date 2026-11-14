@@ -6,8 +6,8 @@
 
 **Status:** maintained. Bug fixes continue; larger new features are on hold for now.
 
-Your Play Console upload was rejected for 16 KB page alignment, or you want to
-find out before you upload. This is a shell script that answers that question
+Play Console warned you about 16 KB page alignment, or you want to find out
+before you upload. This is a shell script that answers that question
 against the actual `.apk` or `.aab` file, on your machine, in a few seconds.
 
 The run below is a real one, on a small APK built with NDK r28. One of its
@@ -30,13 +30,20 @@ $ android-16kb-check app-release.apk
     x86_64         libdemo.so                             [ok]   min align 2**14
 
 FAIL — at least one 64-bit library is not 16 KB aligned.
-  Play will reject this upload.
+  Google Play: from 1 February 2027, updates of apps that target Android 15
+  (API 35) or higher cannot be released unless they support 16 KB memory pages.
+  https://developer.android.com/guide/practices/page-sizes#google-play-compatibility-requirement
+  This check does not read targetSdk. Since 31 August 2026 Play requires phone
+  app updates to target API 36, so this applies to almost every update.
+  https://developer.android.com/google/play/requirements/target-sdk
+  On 16 KB devices an unaligned library may still run in backcompat mode;
+  that does not lift the Play requirement.
 
   Libraries you compile yourself are aligned by NDK r28 or newer.
-  A failure here is usually a PREBUILT .so shipped inside a dependency,
-  built with an older NDK. Bumping your own ndkVersion cannot fix that
-  binary — find the dependency that owns the .so named above and upgrade
-  it to a release that ships 16 KB-aligned libraries, or drop it.
+  A failure here is usually a PREBUILT .so shipped inside a dependency.
+  Bumping your own ndkVersion cannot fix that binary — find the dependency
+  that owns the .so named above and upgrade it to a release that ships
+  16 KB-aligned libraries, or drop it.
 $ echo $?
 1
 ```
@@ -45,7 +52,7 @@ Quick start:
 
 ```bash
 curl -fsSLo android-16kb-check \
-  https://raw.githubusercontent.com/saimskywalker/alignmint/v1.1.0/android-16kb-check
+  https://raw.githubusercontent.com/saimskywalker/alignmint/v1.2.0/android-16kb-check
 chmod +x android-16kb-check
 ./android-16kb-check path/to/app-release.aab
 ```
@@ -55,10 +62,16 @@ location. An AAB also needs `bundletool`; see [Prerequisites](#prerequisites).
 
 ## The requirement
 
-Since **2025-11-01** Google Play requires 16 KB memory page support for apps
-that target API 35 or higher and run on 64-bit devices. It is checked when the
-artifact is uploaded, before review, so a failure rejects the build rather than
-delaying it.
+Google Play requires apps that target API 35 or higher to support 16 KB memory
+pages on 64-bit devices. From **1 February 2027**, an update that does not
+support them cannot be released
+([Android docs](https://developer.android.com/guide/practices/page-sizes#google-play-compatibility-requirement)).
+This check does not read `targetSdk`, but since 31 August 2026 phone app
+updates have to target API 36
+([target API requirement](https://developer.android.com/google/play/requirements/target-sdk)),
+so the requirement applies to almost every update. On a 16 KB device an
+unaligned library may still run in backcompat mode; that does not lift the
+Play requirement.
 
 Two independent things have to hold, and both are checked here:
 
@@ -82,7 +95,7 @@ reported as `SKIP` rather than passed over silently.
 | exit | meaning | what to do |
 |---|---|---|
 | `0` | Aligned. Archive alignment is correct and every 64-bit library has all LOAD segments at `2**14` or better. | Upload. |
-| `1` | Not aligned. Play would reject this upload. | Fix it — see below. |
+| `1` | Not aligned. From 1 February 2027 Play will not release an update like this. | Fix it — see below. |
 | `2` | **Could not verify.** A required tool or the artifact is missing, or the artifact has nothing to check. | Install the missing tool and run again. |
 
 **Exit code 2 is not a pass.** This matters more than it looks. A checker that
@@ -129,7 +142,7 @@ It is one file with no dependencies beyond the Android toolchain it calls.
 
 ```bash
 sudo curl -fsSLo /usr/local/bin/android-16kb-check \
-  https://raw.githubusercontent.com/saimskywalker/alignmint/v1.1.0/android-16kb-check
+  https://raw.githubusercontent.com/saimskywalker/alignmint/v1.2.0/android-16kb-check
 sudo chmod +x /usr/local/bin/android-16kb-check
 ```
 
@@ -140,7 +153,7 @@ somewhere you own and make sure that directory is on `PATH`:
 ```bash
 mkdir -p ~/.local/bin
 curl -fsSLo ~/.local/bin/android-16kb-check \
-  https://raw.githubusercontent.com/saimskywalker/alignmint/v1.1.0/android-16kb-check
+  https://raw.githubusercontent.com/saimskywalker/alignmint/v1.2.0/android-16kb-check
 chmod +x ~/.local/bin/android-16kb-check
 ```
 
@@ -191,7 +204,7 @@ downloads the jar. Add this after the step that builds your release:
 - name: Check 16 KB page alignment
   run: |
     curl -fsSLo android-16kb-check \
-      https://raw.githubusercontent.com/saimskywalker/alignmint/v1.1.0/android-16kb-check
+      https://raw.githubusercontent.com/saimskywalker/alignmint/v1.2.0/android-16kb-check
     chmod +x android-16kb-check
     curl -fsSLo bundletool-all.jar \
       https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
@@ -229,7 +242,7 @@ on one line):
 ```json
 {
   "schemaVersion": 1,
-  "tool": {"name": "alignmint", "version": "1.1.0"},
+  "tool": {"name": "alignmint", "version": "1.2.0"},
   "exitCode": 1,
   "summary": {"error": 1, "warning": 0, "info": 0},
   "findings": [
@@ -365,7 +378,7 @@ dependency problem. Upgrade the Android Gradle Plugin to 8.5.1 or newer.
 
 It proves what a static read of the artifact can prove: how the libraries are
 stored in the zip, and what alignment each 64-bit ELF declares for its LOAD
-segments. That is exactly the pair of properties Play checks at upload, which
+segments. Those are the two properties the Play requirement is about, which
 is why passing here and passing there tend to agree.
 
 It does not run the app. A library can be aligned and still crash on a 16 KB
