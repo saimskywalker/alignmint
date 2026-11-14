@@ -161,6 +161,83 @@ assert_line() {
   return 0
 }
 
+# Compressed libraries are extracted at install, so zip alignment does not
+# apply and the ELF check alone decides. useLegacyPackaging = true gives an
+# AAB whose bundle config disables uncompressNativeLibraries.
+t_aab_compressed_aligned_passes() {
+  TEST_ENV="STUB_BUNDLETOOL_NATIVE=disabled"
+  run_tool "${FIXTURES}/sample.aab"
+  assert_rc 0 || return 1
+  assert_out "[info] native libraries are stored compressed" || return 1
+  assert_out "archive alignment does not apply (compressed)" || return 1
+}
+
+t_aab_compressed_unaligned_fails_with_one() {
+  TEST_ENV="STUB_BUNDLETOOL_NATIVE=disabled STUB_OBJDUMP_ALIGN=2**12"
+  run_tool "${FIXTURES}/sample.aab"
+  assert_rc 1 || return 1
+  assert_out "[FAIL] min align 2**12" || return 1
+}
+
+# A missing block or alignment takes the default of the bundletool version
+# recorded in the config (bundletool's OptimizationsMerger): uncompressed
+# from 0.6.0, and 16 KB-aligned from 1.17.0.
+t_aab_default_alignment_follows_bundletool_version() {
+  TEST_ENV="STUB_BUNDLETOOL_ALIGNED=0 STUB_BUNDLETOOL_VERSION=1.17.0"
+  run_tool "${FIXTURES}/sample.aab"
+  assert_rc 0 || return 1
+  assert_out "default of bundletool 1.17.0: 16 KB" || return 1
+  TEST_ENV="STUB_BUNDLETOOL_NATIVE=absent STUB_BUNDLETOOL_VERSION=1.18.3"
+  run_tool "${FIXTURES}/sample.aab"
+  assert_rc 0 || return 1
+  TEST_ENV="STUB_BUNDLETOOL_NATIVE=absent STUB_BUNDLETOOL_VERSION=1.16.0"
+  run_tool "${FIXTURES}/sample.aab"
+  assert_rc 1 || return 1
+  assert_out "(not present at all)" || return 1
+  TEST_ENV="STUB_BUNDLETOOL_NATIVE=absent STUB_BUNDLETOOL_VERSION=0.5.0"
+  run_tool "${FIXTURES}/sample.aab"
+  assert_rc 0 || return 1
+  assert_out "stored compressed" || return 1
+}
+
+t_aab_default_without_bundletool_version_is_two() {
+  TEST_ENV="STUB_BUNDLETOOL_NATIVE=absent STUB_BUNDLETOOL_VERSION="
+  run_tool "${FIXTURES}/sample.aab"
+  assert_rc 2 || return 1
+  assert_out "records no bundletool version" || return 1
+}
+
+# zipalign skips compressed entries; a zipalign that says "misaligned" here
+# must not decide the verdict, the central directory does.
+t_apk_compressed_libs_skip_zipalign() {
+  TEST_ENV="STUB_ZIPALIGN_RC=1"
+  run_tool "${FIXTURES}/compressed-libs.apk"
+  assert_rc 0 || return 1
+  assert_out "every lib/**.so entry is compressed" || return 1
+  TEST_ENV="STUB_ZIPALIGN_RC=1 STUB_OBJDUMP_ALIGN=2**12"
+  run_tool "${FIXTURES}/compressed-libs.apk"
+  assert_rc 1 || return 1
+}
+
+t_json_aab_compressed() {
+  TEST_ENV="STUB_BUNDLETOOL_NATIVE=disabled"
+  run_tool_split --format json "${FIXTURES}/sample.aab"
+  assert_rc 0 || return 1
+  assert_json_object || return 1
+  assert_out '"summary":{"error":0,"warning":0,"info":1},"findings":[{"id":"archive-compressed","severity":"info"' || return 1
+  assert_out '"archive":{"check":"bundleConfig","status":"ok","detail":"native libraries are stored compressed (uncompressNativeLibraries is off); zip alignment does not apply"}' || return 1
+  TEST_ENV="STUB_ZIPALIGN_RC=1"
+  run_tool_split --format json "${FIXTURES}/compressed-libs.apk"
+  assert_rc 0 || return 1
+  assert_json_object || return 1
+  assert_out '"archive":{"check":"centralDirectory","status":"ok"' || return 1
+  TEST_ENV="STUB_BUNDLETOOL_NATIVE=absent STUB_BUNDLETOOL_VERSION="
+  run_tool_split --format json "${FIXTURES}/sample.aab"
+  assert_rc 2 || return 1
+  assert_json_object || return 1
+  assert_out '"findings":[{"id":"bundle-config-unversioned","severity":"error"' || return 1
+}
+
 # ------------------------------------------------------------ golden output
 #
 # The text report is read by people and, until --format json, by scripts that
@@ -1029,6 +1106,10 @@ t_golden_aab_archive_fail() {
   TEST_ENV="STUB_BUNDLETOOL_ALIGNED=0"
   golden_case aab-archive-fail "${FIXTURES}/sample.aab"
 }
+t_golden_aab_compressed() {
+  TEST_ENV="STUB_BUNDLETOOL_NATIVE=disabled"
+  golden_case aab-compressed "${FIXTURES}/sample.aab"
+}
 t_golden_only_32bit()        { golden_case only-32bit "${FIXTURES}/only-32bit.apk"; }
 t_golden_empty_64bit_abi()   { golden_case empty-64bit-abi "${FIXTURES}/empty-64bit-abi.apk"; }
 t_golden_missing_toolchain() {
@@ -1081,6 +1162,11 @@ check "an unaligned zip exits 1"                    t_apk_unaligned_zip_fails_wi
 check "an unreadable ELF exits 1"                   t_unreadable_elf_fails_with_one
 check "an aligned AAB exits 0"                      t_aab_aligned_passes
 check "an AAB without PAGE_ALIGNMENT_16K exits 1"   t_aab_without_page_alignment_fails_with_one
+check "a compressed AAB with aligned ELF exits 0"   t_aab_compressed_aligned_passes
+check "a compressed AAB with unaligned ELF exits 1" t_aab_compressed_unaligned_fails_with_one
+check "AAB defaults follow the bundletool version"  t_aab_default_alignment_follows_bundletool_version
+check "an AAB default with no version exits 2"     t_aab_default_without_bundletool_version_is_two
+check "an APK with compressed libs skips zipalign"  t_apk_compressed_libs_skip_zipalign
 check "a bundletool failure exits 2"                t_aab_bundletool_failure_is_two
 check "BUNDLETOOL env var is honoured"              t_bundletool_env_var_is_honoured
 check "--bundletool flag is honoured"               t_bundletool_flag_is_honoured
@@ -1093,6 +1179,7 @@ check "json: an aligned APK"                       t_json_apk_aligned
 check "json: an unaligned feature module"           t_json_aab_feature_module_unaligned
 check "json: an unreadable ELF is fail"             t_json_unreadable_elf_is_fail
 check "json: an AAB without PAGE_ALIGNMENT_16K"     t_json_aab_archive_unaligned
+check "json: compressed libraries"                 t_json_aab_compressed
 check "json: an unaligned zip"                      t_json_apk_zip_unaligned
 check "json: a 32-bit-only APK is unverified"       t_json_only_32bit_is_unverified
 check "json: a 64-bit dir with no .so"              t_json_empty_64bit_abi_is_unverified
@@ -1121,6 +1208,7 @@ check "golden: no readable LOAD segments"           t_golden_apk_no_load
 check "golden: unaligned zip"                       t_golden_apk_zip_fail
 check "golden: unaligned lib in a feature module"   t_golden_aab_feature_fail
 check "golden: AAB without PAGE_ALIGNMENT_16K"      t_golden_aab_archive_fail
+check "golden: AAB with compressed libraries"       t_golden_aab_compressed
 check "golden: 32-bit-only artifact"                t_golden_only_32bit
 check "golden: 64-bit dir with no .so"              t_golden_empty_64bit_abi
 check "golden: missing toolchain"                   t_golden_missing_toolchain

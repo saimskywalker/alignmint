@@ -8,10 +8,10 @@
 --- stderr
     [FAIL] bundle config does NOT declare PAGE_ALIGNMENT_16K
            uncompressNativeLibraries block was:
-  uncompressNativeLibraries {
-    enabled: true
-  }
-}
+    "uncompressNativeLibraries": {
+      "enabled": true
+    },
+           bundletool version in the config: 1.16.0
 
 FAIL — the bundle is not storing native libraries 16 KB-aligned.
   This comes from the Android Gradle Plugin. Upgrade to AGP 8.5.1 or newer.

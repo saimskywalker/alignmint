@@ -10,6 +10,24 @@ looks barely different.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-14
+
+### Fixed
+
+- Native libraries stored compressed are no longer judged by zip alignment.
+  Android extracts them at install, so an AAB whose bundle config turns
+  `uncompressNativeLibraries` off (`useLegacyPackaging = true`) now gets its
+  verdict from the ELF check instead of exiting 1, and an APK whose
+  `lib/**.so` entries are all compressed is read from the zip's central
+  directory rather than from zipalign. Both print an `[info]` line and the
+  `archive-compressed` finding. A bundle config that leaves the block or its
+  `alignment` out gets bundletool's default for the bundletool version it
+  records, and exits 2 when it records none. A bundle that declares
+  uncompressed libraries without `PAGE_ALIGNMENT_16K` and records bundletool
+  older than 1.17.0, as AGP 8.3 to 8.5.0 produce, still exits 1. The exit
+  codes keep their meaning.
+  ([#38](https://github.com/saimskywalker/alignmint/issues/38))
+
 ## [1.2.0] - 2026-11-14
 
 ### Fixed

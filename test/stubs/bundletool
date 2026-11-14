@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Stub bundletool. Only `dump config` is implemented; STUB_BUNDLETOOL_ALIGNED
-# decides whether the printed config declares PAGE_ALIGNMENT_16K.
+# Stub bundletool. Only `dump config` is implemented, in the JSON shape that
+# bundletool 1.18.3 prints; it leaves out fields at their default, so
+# "enabled": false shows as an empty block.
+#   STUB_BUNDLETOOL_ALIGNED=0     no alignment line
+#   STUB_BUNDLETOOL_NATIVE        enabled (default), disabled or absent
+#   STUB_BUNDLETOOL_VERSION       the recorded version; empty leaves it out
 set -eu
 if [[ "${STUB_BUNDLETOOL_FAIL:-0}" == "1" ]]; then
   echo "stub bundletool: forced failure" >&2
@@ -9,11 +13,23 @@ fi
 # Real bundletool chatters on stderr under recent JDKs; mimic that so the
 # tool's stderr suppression stays exercised.
 echo "WARNING: sun.misc.Unsafe::objectFieldOffset is deprecated" >&2
-echo "optimizations {"
-echo "  uncompressNativeLibraries {"
-echo "    enabled: true"
-if [[ "${STUB_BUNDLETOOL_ALIGNED:-1}" == "1" ]]; then
-  echo "    alignment: PAGE_ALIGNMENT_16K"
+version="${STUB_BUNDLETOOL_VERSION-1.16.0}"
+echo "{"
+if [[ -n "${version}" ]]; then
+  printf '  "bundletool": {\n    "version": "%s"\n  },\n' "${version}"
 fi
-echo "  }"
-echo "}"
+echo '  "optimizations": {'
+case "${STUB_BUNDLETOOL_NATIVE:-enabled}" in
+  absent) ;;
+  disabled) printf '    "uncompressNativeLibraries": {\n    },\n' ;;
+  *)
+    echo '    "uncompressNativeLibraries": {'
+    if [[ "${STUB_BUNDLETOOL_ALIGNED:-1}" == "1" ]]; then
+      printf '      "enabled": true,\n      "alignment": "PAGE_ALIGNMENT_16K"\n'
+    else
+      echo '      "enabled": true'
+    fi
+    echo '    },'
+    ;;
+esac
+printf '    "uncompressDexFiles": {\n      "enabled": true\n    }\n  }\n}\n'
