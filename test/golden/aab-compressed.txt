@@ -1,0 +1,17 @@
+--- exit 0
+--- stdout
+==> artifact : @FIXTURES@/sample.aab
+==> objdump  : @STUBS@/llvm-objdump
+==> archive  : bundletool (bundletool)
+
+==> Archive alignment
+    [info] native libraries are stored compressed (uncompressNativeLibraries is off);
+           zip alignment does not apply. Installs are larger. See
+           https://developer.android.com/guide/practices/page-sizes#agp_version_85_or_lower
+
+==> ELF LOAD segment alignment (must be >= 2**14)
+    arm64-v8a      libexample.so                          [ok]   min align 2**14
+    armeabi-v7a    [SKIP] 32-bit, exempt (1 libs)
+
+PASS — every 64-bit library is 16 KB aligned; archive alignment does not apply (compressed).
+--- stderr

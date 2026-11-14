@@ -10,8 +10,8 @@ import zipfile
 SO = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 56 + b"not-a-real-elf-body-fixture-only\n"
 
 
-def make(path, entries):
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+def make(path, entries, method=zipfile.ZIP_STORED):
+    with zipfile.ZipFile(path, "w", method) as z:
         for name, data in entries:
             z.writestr(name, data)
 
@@ -74,6 +74,12 @@ make("escape-names.apk", [
     ("lib/arm64-v8a/lib\"quote\\back.so", SO),
     ("lib/armeabi-v7a/liblegacy.so", SO),
 ])
+# Every lib/ entry deflated, as AGP packages an APK with useLegacyPackaging.
+make("compressed-libs.apk", [
+    ("AndroidManifest.xml", b"fixture\n"),
+    ("lib/arm64-v8a/libexample.so", SO),
+    ("lib/armeabi-v7a/liblegacy.so", SO),
+], zipfile.ZIP_DEFLATED)
 
 # An archive holding a 64-bit .so that unzip will refuse to extract: its
 # compression method is patched to one Info-ZIP does not implement, which is

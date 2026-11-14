@@ -75,17 +75,29 @@ Play requirement.
 
 Two independent things have to hold, and both are checked here:
 
-1. **Archive alignment.** Native libraries have to be stored uncompressed and
+1. **Archive alignment.** Native libraries stored uncompressed have to be
    16 KB-aligned inside the zip. The Android Gradle Plugin does this from
    8.5.1 onward. In an AAB it appears as `PAGE_ALIGNMENT_16K` in the bundle
-   config; in an APK it is what `zipalign -c -P 16 4` verifies.
+   config; in an APK it is what `zipalign -c -P 16 4` verifies. Libraries
+   stored compressed (`useLegacyPackaging = true`, the
+   [alternative for AGP 8.5 or lower](https://developer.android.com/guide/practices/page-sizes#agp_version_85_or_lower))
+   are extracted at install, so zip alignment does not apply to them; the
+   report says `[info]` and the ELF check decides.
 
 2. **ELF alignment.** Every `LOAD` segment of every 64-bit `.so` must be
    aligned to at least `2**14`. NDK r28 and newer link this way by default.
 
-These fail independently. A perfectly linked library stored compressed still
-breaks on device, and a badly linked library stored with flawless zip alignment
-breaks too. Checking one is not checking the other.
+These fail independently. A perfectly linked library stored uncompressed at a
+4 KB zip offset still breaks on device, and a badly linked library stored with
+flawless zip alignment breaks too. Checking one is not checking the other.
+
+An AAB's bundle config can leave `uncompressNativeLibraries` or its
+`alignment` out. bundletool then uses the default of the bundletool version
+recorded in the config: uncompressed from 0.6.0, 16 KB-aligned from 1.17.0
+([`OptimizationsMerger`](https://github.com/google/bundletool/blob/1.18.3/src/main/java/com/android/tools/build/bundletool/optimizations/OptimizationsMerger.java)),
+and so does this check. A config that needs that default but records no
+version exits `2`. An APK's libraries count as compressed when every
+`lib/**.so` entry is compressed in the zip's central directory.
 
 32-bit `armeabi-v7a` is exempt — 16 KB pages are a 64-bit feature — and is
 reported as `SKIP` rather than passed over silently.
@@ -287,7 +299,7 @@ on one line):
 | `artifact` | The path as given on the command line, or `null` if the run stopped before one was known. |
 | `kind` | `"apk"`, `"aab"`, or `null` if the run stopped before that was known. |
 | `tools` | `objdump` and `archive` (bundletool for an AAB, zipalign for an APK), as the text report's header names them; `null` for one that was not resolved. |
-| `archive` | The archive-alignment check: `check` is `"bundleConfig"` or `"zipalign"`, `status` is `"ok"` or `"fail"`, `detail` is the text report's line. `null` if the run stopped before the check gave an answer. |
+| `archive` | The archive-alignment check: `check` is `"bundleConfig"`, `"zipalign"`, or `"centralDirectory"` for an APK whose libraries are all compressed; `status` is `"ok"` or `"fail"`, `detail` is the text report's line. `null` if the run stopped before the check gave an answer. |
 | `libraries` | One entry per line of the ELF section of the text report, in the same order. Empty if the run stopped before it. |
 | `hints` | What to do next, as a list of strings; empty when aligned. Each string is one whole sentence or paragraph: for `unverified` these are the lines the text report prints under `CANNOT VERIFY`, with the lines it wraps for the terminal joined back together. |
 
@@ -316,13 +328,15 @@ reported in `libraries` with status `skip`.
 |---|---|---|---|
 | `library-unaligned` | error | unaligned | A 64-bit library has a LOAD segment aligned below `2**14`. One finding per library; the message names it. |
 | `library-no-load` | error | unaligned | objdump read a 64-bit library but found no readable LOAD segment in it. |
-| `archive-unaligned` | error | unaligned | The bundle config does not declare `PAGE_ALIGNMENT_16K`, or zipalign reports the APK is not 16 KB aligned. |
+| `archive-unaligned` | error | unaligned | The bundle config stores native libraries uncompressed without `PAGE_ALIGNMENT_16K`, or zipalign reports the APK is not 16 KB aligned. |
+| `archive-compressed` | info | any | Native libraries are stored compressed, so zip alignment does not apply. |
 | `abi-without-libraries` | warning | any | A 64-bit ABI directory holds no `.so` (the `[none]` line). If no other 64-bit library was read either, `nothing-measured` follows. |
 | `option-invalid` | error | unverified | An unknown option, an option missing its value, or more than one artifact. |
 | `artifact-missing` | error | unverified | No artifact was given, or the path does not exist. |
 | `artifact-invalid` | error | unverified | The path is not a regular file, or does not end in `.apk` or `.aab`. |
 | `tool-missing` | error | unverified | A required tool was not found: llvm-objdump (including under the NDK named by `--ndk` or `ANDROID_NDK_HOME`), bundletool, java for a bundletool `.jar`, zipalign or unzip. |
 | `tool-failed` | error | unverified | A tool was found but could not do its check: zipalign exited with something other than 0 or 1, or objdump could not read a library. |
+| `bundle-config-unversioned` | error | unverified | The bundle config leaves native library packaging to bundletool's default but records no bundletool version. |
 | `archive-unreadable` | error | unverified | bundletool could not read the bundle config, or unzip could not list or fully extract the native libraries. |
 | `no-native-libraries` | error | unverified | The artifact has no native libraries at all. |
 | `32-bit-only` | error | unverified | The artifact has only 32-bit ABIs, so there is nothing to check. |
