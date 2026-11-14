@@ -282,6 +282,16 @@ t_help_exits_zero() {
   assert_out "NOT A PASS" || return 1
 }
 
+t_help_states_play_requirement() {
+  # 1.1.0 said Play rejects an unaligned upload. The documented rule is that
+  # from 2027-02-01 such an update cannot be released.
+  run_tool --help
+  assert_rc 0 || return 1
+  assert_out "From 1 February 2027 Google Play will not release an" || return 1
+  assert_out "update like this for an app that targets API 35 or higher." || return 1
+  assert_not_out "reject" || return 1
+}
+
 t_help_short_flag() {
   run_tool -h
   assert_rc 0 || return 1
@@ -460,13 +470,13 @@ t_sixtyfour_bit_dir_with_no_libs_is_reported() {
 
 t_objdump_that_cannot_run_is_two_not_one() {
   # objdump present but unable to read the file. Nothing was measured, so this
-  # is "could not verify", not "Play will reject this upload" — the second
-  # sends someone hunting an alignment bug that was never observed.
+  # is "could not verify", not a FAIL — the second sends someone hunting an
+  # alignment bug that was never observed.
   TEST_ENV="STUB_OBJDUMP_FAIL=1"
   run_tool "${FIXTURES}/sample.apk"
   assert_rc 2 || return 1
   assert_out "could not read" || return 1
-  assert_not_out "Play will reject" || return 1
+  assert_not_out "not 16 KB aligned" || return 1
   assert_not_out "PASS" || return 1
 }
 
@@ -573,7 +583,7 @@ t_apk_underaligned_elf_fails_with_one() {
   run_tool "${FIXTURES}/sample.apk"
   assert_rc 1 || return 1
   assert_out "min align 2**12" || return 1
-  assert_out "Play will reject this upload" || return 1
+  assert_out "updates of apps that target Android 15" || return 1
   # The remedy has to point at the dependency, not at the caller's own NDK.
   assert_out "PREBUILT" || return 1
 }
@@ -650,6 +660,35 @@ t_aab_feature_module_aligned_passes() {
   assert_not_out "BUNDLE-METADATA" || return 1
 }
 
+t_fail_message_states_play_requirement() {
+  TEST_ENV="STUB_OBJDUMP_ALIGN=2**12"
+  run_tool "${FIXTURES}/sample.apk"
+  assert_rc 1 || return 1
+  local want
+  want="$(cat <<'EOF'
+FAIL — at least one 64-bit library is not 16 KB aligned.
+  Google Play: from 1 February 2027, updates of apps that target Android 15
+  (API 35) or higher cannot be released unless they support 16 KB memory pages.
+  https://developer.android.com/guide/practices/page-sizes#google-play-compatibility-requirement
+  This check does not read targetSdk. Since 31 August 2026 Play requires phone
+  app updates to target API 36, so this applies to almost every update.
+  https://developer.android.com/google/play/requirements/target-sdk
+  On 16 KB devices an unaligned library may still run in backcompat mode;
+  that does not lift the Play requirement.
+
+  Libraries you compile yourself are aligned by NDK r28 or newer.
+  A failure here is usually a PREBUILT .so shipped inside a dependency.
+EOF
+)"
+  # grep -F would match the lines one by one; the block has to appear whole.
+  if [[ "${OUT}" != *"${want}"* ]]; then
+    fail "expected the FAIL message block, in order"
+    return 1
+  fi
+  assert_not_out "reject" || return 1
+  assert_not_out "AT UPLOAD" || return 1
+}
+
 t_aab_unaligned_lib_in_feature_module_fails_with_one() {
   # The bug in #4: only base/lib/ was extracted, so an unaligned .so in a
   # dynamic feature module was never looked at and the run printed PASS and
@@ -659,7 +698,7 @@ t_aab_unaligned_lib_in_feature_module_fails_with_one() {
   assert_rc 1 || return 1
   assert_line "feature_camera/lib/arm64-v8a/libcamera.so" "[FAIL] min align 2**12" || return 1
   assert_line "libexample.so" "[ok]" || return 1
-  assert_out "Play will reject this upload" || return 1
+  assert_out "updates of apps that target Android 15" || return 1
   assert_not_out "PASS" || return 1
 }
 
@@ -1002,6 +1041,7 @@ t_golden_missing_toolchain() {
 printf 'android-16kb-check test suite\n\n'
 
 check "--help exits 0"                              t_help_exits_zero
+check "--help states the Play requirement"         t_help_states_play_requirement
 check "-h exits 0"                                  t_help_short_flag
 check "--version exits 0"                           t_version
 check "-V exits 0"                                  t_version_short_flag
@@ -1036,6 +1076,7 @@ check "an aligned APK exits 0"                      t_apk_aligned_passes
 check "32-bit ABIs are reported as SKIP"            t_apk_reports_32bit_as_skip
 check "over-aligned libraries pass"                 t_apk_over_aligned_passes
 check "an under-aligned library exits 1"            t_apk_underaligned_elf_fails_with_one
+check "the FAIL message states the Play requirement" t_fail_message_states_play_requirement
 check "an unaligned zip exits 1"                    t_apk_unaligned_zip_fails_with_one
 check "an unreadable ELF exits 1"                   t_unreadable_elf_fails_with_one
 check "an aligned AAB exits 0"                      t_aab_aligned_passes

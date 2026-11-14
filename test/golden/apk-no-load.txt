@@ -14,10 +14,17 @@
     arm64-v8a      libexample.so                          [FAIL] no LOAD segments readable
     arm64-v8a      libsecond.so                           [FAIL] no LOAD segments readable
 FAIL — at least one 64-bit library is not 16 KB aligned.
-  Play will reject this upload.
+  Google Play: from 1 February 2027, updates of apps that target Android 15
+  (API 35) or higher cannot be released unless they support 16 KB memory pages.
+  https://developer.android.com/guide/practices/page-sizes#google-play-compatibility-requirement
+  This check does not read targetSdk. Since 31 August 2026 Play requires phone
+  app updates to target API 36, so this applies to almost every update.
+  https://developer.android.com/google/play/requirements/target-sdk
+  On 16 KB devices an unaligned library may still run in backcompat mode;
+  that does not lift the Play requirement.
 
   Libraries you compile yourself are aligned by NDK r28 or newer.
-  A failure here is usually a PREBUILT .so shipped inside a dependency,
-  built with an older NDK. Bumping your own ndkVersion cannot fix that
-  binary — find the dependency that owns the .so named above and upgrade
-  it to a release that ships 16 KB-aligned libraries, or drop it.
+  A failure here is usually a PREBUILT .so shipped inside a dependency.
+  Bumping your own ndkVersion cannot fix that binary — find the dependency
+  that owns the .so named above and upgrade it to a release that ships
+  16 KB-aligned libraries, or drop it.
