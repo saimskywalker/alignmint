@@ -10,6 +10,18 @@ looks barely different.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-14
+
+### Fixed
+
+- The FAIL message, `--help` and the README no longer say that Play rejects
+  an unaligned upload. The Android documentation says that from 1 February
+  2027, updates of apps that target API 35 or higher cannot be released
+  unless they support 16 KB pages, and the FAIL message now says that, with
+  links to the page-size and target-API requirements. The exit codes are
+  unchanged.
+  ([#34](https://github.com/saimskywalker/alignmint/issues/34))
+
 ### Added
 
 - `--format json` (also `--format=json`) prints the result as one JSON object
@@ -107,6 +119,7 @@ First release.
   be mistaken for one that passed.
 - `--help` and `--version`.
 
-[Unreleased]: https://github.com/saimskywalker/alignmint/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/saimskywalker/alignmint/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/saimskywalker/alignmint/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/saimskywalker/alignmint/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/saimskywalker/alignmint/releases/tag/v1.0.0

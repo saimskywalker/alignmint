@@ -60,7 +60,7 @@ This tool has three answers, and the third one is the reason it exists:
 | exit | meaning |
 |---|---|
 | `0` | aligned |
-| `1` | unaligned — Play would reject the upload |
+| `1` | unaligned — at least one 64-bit library fails the 16 KB requirement |
 | `2` | could not verify |
 
 Most scripts in this space have two answers, and quietly fold "I could not
@@ -124,7 +124,7 @@ readable LOAD segments is a `[FAIL]` and not a shrug. That is specifically the
 case where objdump *ran* and its output held nothing usable. objdump exiting
 non-zero is the other case and is a `2`: nothing was measured, so there is no
 verdict to report. Keep those two apart — reading a non-zero exit as `[FAIL]`
-announces "Play will reject this upload" about a file the tool never opened.
+reports a verdict on a file the tool never opened.
 
 **Any tool's exit status.** The objdump rule above is the general one, and it
 applies to `zipalign` and `unzip` too: a status that means "I could not do the
